@@ -4,11 +4,13 @@ from .base import BaseAgent
 from .claude_code import ClaudeCodeAgent
 from .codex import CodexAgent
 from .cursor import CursorAgent
+from .gemini import GeminiAgent
 
 AGENT_REGISTRY: dict[AgentType, type[BaseAgent]] = {
     AgentType.CLAUDE_CODE: ClaudeCodeAgent,
     AgentType.CODEX: CodexAgent,
     AgentType.CURSOR: CursorAgent,
+    AgentType.GEMINI: GeminiAgent,
 }
 
 
@@ -34,5 +36,6 @@ __all__ = [
     "ClaudeCodeAgent",
     "CodexAgent",
     "CursorAgent",
+    "GeminiAgent",
     "create_agent",
 ]

@@ -12,6 +12,7 @@ class AgentType(str, Enum):
     CLAUDE_CODE = "claude-code"
     CODEX = "codex"
     CURSOR = "cursor"
+    GEMINI = "gemini"
 
 
 class ApprovalMode(str, Enum):
