@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from swarm.agents import create_agent
-from swarm.config import load_config
+from swarm.config import load_config, load_config_with_fallback
 from swarm.config.schema import Config
 from swarm.core import Orchestrator
 from swarm.core.trust import (
@@ -44,23 +44,12 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _find_config(explicit: str | None) -> str:
-    """Locate config file: explicit path > ./swarm.yaml > ./config/swarm.yaml."""
-    if explicit:
-        return explicit
-    cwd = Path.cwd()
-    for candidate in [cwd / "swarm.yaml", cwd / "config" / "swarm.yaml"]:
-        if candidate.exists():
-            return str(candidate)
-    return "config/swarm.yaml"
-
-
-def _load_or_exit(config_path: str) -> Config:
+def _load_or_exit(config_path: str | None) -> tuple[Config, str]:
+    """Load config with fallback to defaults. Returns (config, source)."""
     try:
-        return load_config(config_path)
+        return load_config_with_fallback(config_path)
     except FileNotFoundError:
         console.print(f"[bold red]Error:[/] Config not found: {config_path}")
-        console.print("[dim]Create a swarm.yaml in the current directory or use --config.[/]")
         sys.exit(1)
 
 
@@ -103,7 +92,7 @@ def _check_trust(config: Config, trust_flag: bool) -> bool:
     return False
 
 
-def _print_banner(config: Config) -> None:
+def _print_banner(config: Config, config_source: str) -> None:
     mode = config.swarm.approval_mode.value
     lead_name = config.swarm.lead.agent.value
     worker_names = [w.agent.value for w in config.swarm.workers if w.enabled]
@@ -113,6 +102,7 @@ def _print_banner(config: Config) -> None:
     console.print(
         Panel(
             f"  [dim]Workspace:[/]  {workspace}\n"
+            f"  [dim]Config:[/]     {config_source}\n"
             f"  [dim]Lead:[/]       [bold cyan]{lead_name}[/]\n"
             f"  [dim]Workers:[/]    {workers_str}\n"
             f"  [dim]Approval:[/]   [bold yellow]{mode}[/]",
@@ -250,8 +240,7 @@ def main(
     _setup_logging(verbose)
     ctx.ensure_object(dict)
 
-    config_path = _find_config(config)
-    ctx.obj["config_path"] = config_path
+    ctx.obj["config_explicit"] = config
     ctx.obj["trust_flag"] = trust_flag
 
     # Let subcommands handle themselves
@@ -260,13 +249,13 @@ def main(
 
     # --- Interactive / one-shot mode (requires trust) ---
 
-    cfg = _load_or_exit(config_path)
+    cfg, source = _load_or_exit(config)
 
     if not _check_trust(cfg, trust_flag):
         sys.exit(1)
 
     orch = _build_orchestrator(cfg, work_dir=str(Path.cwd()))
-    _print_banner(cfg)
+    _print_banner(cfg, source)
 
     if prompt:
         try:
@@ -283,7 +272,7 @@ def main(
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show status of configured agents."""
-    cfg = _load_or_exit(ctx.obj["config_path"])
+    cfg, _source = _load_or_exit(ctx.obj["config_explicit"])
     orch = _build_orchestrator(cfg)
     _print_status_table(orch)
 
@@ -292,7 +281,7 @@ def status(ctx: click.Context) -> None:
 @click.pass_context
 def check(ctx: click.Context) -> None:
     """Run health checks on all configured agents."""
-    cfg = _load_or_exit(ctx.obj["config_path"])
+    cfg, _source = _load_or_exit(ctx.obj["config_explicit"])
     orch = _build_orchestrator(cfg)
     asyncio.run(_run_health_checks(orch))
 

@@ -67,8 +67,13 @@ class TerminalConfig(BaseModel):
 class SwarmConfig(BaseModel):
     bus_dir: Path = Path(".swarm")
     approval_mode: ApprovalMode = ApprovalMode.FULL_AUTO
-    lead: AgentConfig
-    workers: list[AgentConfig] = Field(default_factory=list)
+    lead: AgentConfig = Field(default_factory=lambda: AgentConfig(agent=AgentType.CLAUDE_CODE))
+    workers: list[AgentConfig] = Field(
+        default_factory=lambda: [
+            AgentConfig(agent=AgentType.CODEX),
+            AgentConfig(agent=AgentType.CURSOR),
+        ]
+    )
     tasks: TaskSettings = Field(default_factory=TaskSettings)
 
 

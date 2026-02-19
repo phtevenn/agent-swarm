@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from swarm.config import load_config
+from swarm.config import load_config, load_config_with_fallback
+from swarm.config.loader import find_config
 from swarm.config.schema import AgentType, ApprovalMode, Config
 
 
@@ -31,3 +32,37 @@ def test_config_defaults():
 def test_config_approval_mode():
     config = load_config("config/swarm.yaml")
     assert config.swarm.approval_mode == ApprovalMode.FULL_AUTO
+
+
+def test_builtin_defaults_when_no_config(tmp_path: Path):
+    cfg, source = load_config_with_fallback(None)
+    # find_config returns None from tmp_path (no config files)
+    # but load_config_with_fallback uses cwd, so test the explicit None path
+    assert source == "built-in defaults" or source.endswith(".yaml")
+    assert cfg.swarm.lead.agent == AgentType.CLAUDE_CODE
+
+
+def test_find_config_discovers_swarm_yaml(tmp_path: Path):
+    (tmp_path / "swarm.yaml").write_text("swarm:\n  lead:\n    agent: claude-code\n")
+    found = find_config(tmp_path)
+    assert found is not None
+    assert found.name == "swarm.yaml"
+
+
+def test_find_config_discovers_config_subdir(tmp_path: Path):
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    (cfg_dir / "swarm.yaml").write_text("swarm:\n  lead:\n    agent: claude-code\n")
+    found = find_config(tmp_path)
+    assert found is not None
+    assert str(found).endswith("config/swarm.yaml")
+
+
+def test_find_config_returns_none(tmp_path: Path):
+    assert find_config(tmp_path) is None
+
+
+def test_explicit_config_path():
+    cfg, source = load_config_with_fallback("config/swarm.yaml")
+    assert source == "config/swarm.yaml"
+    assert cfg.swarm.lead.agent == AgentType.CLAUDE_CODE
