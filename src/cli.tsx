@@ -13,7 +13,11 @@ program
   .option('-p, --prompt <text>', 'One-shot task (non-interactive)')
   .option('--config <path>', 'Config file path')
   .option('--trust', 'Trust workspace for this session')
-  .option('-v, --verbose', 'Show full worker output');
+  .option('-v, --verbose', 'Show full worker output')
+  .action(() => {
+    // Handled by render(<App />) below; this prevents commander from
+    // defaulting to --help output when no subcommand is given.
+  });
 
 program
   .command('trust')
