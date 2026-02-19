@@ -37,6 +37,10 @@ class AgentConfig(BaseModel):
 class TaskSettings(BaseModel):
     worker_timeout: int = 600
     max_parallel: int = 4
+    # If a worker produces no stdout for this many seconds, it is considered stuck and cancelled.
+    no_output_timeout: int = 120
+    # Max seconds to wait for the lead agent (initial response or synthesis). Prevents main agent hang.
+    lead_timeout: int = 600
 
 
 class DiscordConfig(BaseModel):

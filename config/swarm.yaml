@@ -26,6 +26,8 @@ swarm:
     - agent: cursor
       # enabled: true
       # max_concurrent_tasks: 1
+    # - agent: gemini
+    #   enabled: true
 
   # Task settings
   tasks:
@@ -33,6 +35,10 @@ swarm:
     worker_timeout: 600
     # Max number of subtasks running in parallel
     max_parallel: 4
+    # If a worker produces no stdout for this long (seconds), it is killed to avoid hang
+    no_output_timeout: 120
+    # Max seconds to wait for the lead agent (prevents main agent hang)
+    lead_timeout: 600
 
 # Phase 2: Discord integration
 # discord:
