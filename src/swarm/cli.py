@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -114,13 +115,50 @@ def _print_banner(config: Config, config_source: str) -> None:
     )
 
 
-def _interactive_loop(orch: Orchestrator) -> None:
-    """REPL: conversational interface to the lead agent."""
-    console.print("[dim]Talk to the lead agent, or /help for commands. Ctrl+C to exit.[/]\n")
+# ---------------------------------------------------------------------------
+# Async REPL — supports Ctrl+C to interrupt running agents
+# ---------------------------------------------------------------------------
+
+
+async def _async_input(prompt_text: str) -> str:
+    """Read a line of input without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: console.input(prompt_text))
+
+
+async def _run_chat(orch: Orchestrator, message: str) -> None:
+    """Run a chat message through the orchestrator with cancellation support."""
+    response = await orch.chat(message)
+    if response is not None:
+        render_response(response, agent_name=orch.lead.name)
+
+
+async def _async_interactive_loop(orch: Orchestrator) -> None:
+    """Async REPL: Ctrl+C interrupts the running agent, not the session."""
+    console.print("[dim]Talk to the lead agent, or /help for commands. Ctrl+C to interrupt.[/]\n")
+
+    current_task: asyncio.Task | None = None
+
+    loop = asyncio.get_running_loop()
+    interrupted = asyncio.Event()
+
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def _handle_sigint(*_: object) -> None:
+        if current_task and not current_task.done():
+            current_task.cancel()
+            interrupted.set()
+        else:
+            signal.signal(signal.SIGINT, original_sigint)
+            loop.call_soon(lambda: None)
 
     while True:
+        signal.signal(signal.SIGINT, original_sigint)
+        interrupted.clear()
+
         try:
-            message = console.input("[bold green]swarm>[/] ").strip()
+            message = await _async_input("[bold green]swarm>[/] ")
+            message = message.strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Goodbye.[/]")
             break
@@ -129,21 +167,32 @@ def _interactive_loop(orch: Orchestrator) -> None:
             continue
 
         if message.startswith("/"):
-            if _handle_command(message, orch):
+            if await _handle_command(message, orch):
                 break
             continue
 
+        signal.signal(signal.SIGINT, _handle_sigint)
+
+        current_task = asyncio.create_task(_run_chat(orch, message))
         try:
-            response = asyncio.run(orch.chat(message))
-            render_response(response, agent_name=orch.lead.name)
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Interrupted.[/]\n")
-            asyncio.run(orch.cancel_all())
+            await current_task
+        except asyncio.CancelledError:
+            console.print("\n[yellow]Interrupted — agents cancelled.[/]\n")
+            await orch.cancel_all()
         except Exception as exc:
             render_error(str(exc))
+        finally:
+            current_task = None
+
+    signal.signal(signal.SIGINT, original_sigint)
 
 
-def _handle_command(cmd: str, orch: Orchestrator) -> bool:
+def _interactive_loop(orch: Orchestrator) -> None:
+    """Entry point for the interactive REPL."""
+    asyncio.run(_async_interactive_loop(orch))
+
+
+async def _handle_command(cmd: str, orch: Orchestrator) -> bool:
     """Handle /slash commands. Returns True if the session should end."""
     parts = cmd.split()
     name = parts[0].lower()
@@ -153,11 +202,11 @@ def _handle_command(cmd: str, orch: Orchestrator) -> bool:
         return True
 
     if name == "/status":
-        _print_status_table(orch)
+        await _print_status_table(orch)
         return False
 
     if name == "/check":
-        asyncio.run(_run_health_checks(orch))
+        await _run_health_checks(orch)
         return False
 
     if name == "/help":
@@ -167,6 +216,8 @@ def _handle_command(cmd: str, orch: Orchestrator) -> bool:
             "  [cyan]/check[/]   — Health-check agent CLIs\n"
             "  [cyan]/help[/]    — Show this help\n"
             "  [cyan]/quit[/]    — Exit swarm\n"
+            "\n"
+            "[dim]Ctrl+C interrupts the running agent without exiting.[/]\n"
         )
         return False
 
@@ -174,7 +225,7 @@ def _handle_command(cmd: str, orch: Orchestrator) -> bool:
     return False
 
 
-def _print_status_table(orch: Orchestrator) -> None:
+async def _print_status_table(orch: Orchestrator) -> None:
     mode = orch.config.swarm.approval_mode.value
     table = Table(title=f"Agent Status  [dim](approval: {mode})[/dim]")
     table.add_column("Agent", style="cyan")
@@ -183,7 +234,7 @@ def _print_status_table(orch: Orchestrator) -> None:
     table.add_column("Approval", style="yellow")
     table.add_column("State")
 
-    statuses = asyncio.run(orch.get_status())
+    statuses = await orch.get_status()
     table.add_row(
         orch.lead.name,
         "lead",
@@ -244,11 +295,8 @@ def main(
     ctx.obj["config_explicit"] = config
     ctx.obj["trust_flag"] = trust_flag
 
-    # Let subcommands handle themselves
     if ctx.invoked_subcommand is not None:
         return
-
-    # --- Interactive / one-shot mode (requires trust) ---
 
     cfg, source = _load_or_exit(config)
 
@@ -261,7 +309,8 @@ def main(
     if prompt:
         try:
             response = asyncio.run(orch.chat(prompt))
-            render_response(response, agent_name=orch.lead.name)
+            if response is not None:
+                render_response(response, agent_name=orch.lead.name)
         except Exception as exc:
             render_error(str(exc))
             sys.exit(1)
@@ -275,7 +324,7 @@ def status(ctx: click.Context) -> None:
     """Show status of configured agents."""
     cfg, _source = _load_or_exit(ctx.obj["config_explicit"])
     orch = _build_orchestrator(cfg)
-    _print_status_table(orch)
+    asyncio.run(_print_status_table(orch))
 
 
 @main.command()

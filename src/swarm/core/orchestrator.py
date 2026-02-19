@@ -88,12 +88,11 @@ class Orchestrator:
     def all_agents(self) -> dict[str, BaseAgent]:
         return {self.lead.name: self.lead, **self.workers}
 
-    async def chat(self, message: str) -> str:
+    async def chat(self, message: str) -> str | None:
         """Send a message to the lead agent and handle any delegation.
 
-        This is the main entry point. The lead responds conversationally.
-        If its response contains <swarm:delegate> blocks, the orchestrator
-        runs those tasks on workers and feeds results back to the lead.
+        Returns the response text for the CLI to render, or None if the
+        orchestrator already rendered everything (delegation flow).
         """
         response = await self.lead.send(
             message,
@@ -128,7 +127,9 @@ class Orchestrator:
             "Please review the results and provide a summary to the user."
         )
 
-        return await self.lead.send(followup, continue_session=True)
+        synthesis = await self.lead.send(followup, continue_session=True)
+        render.render_response(synthesis)
+        return None
 
     async def _run_delegations(self, requests: list[dict]) -> list[dict]:
         """Execute delegation requests on worker agents in parallel."""
@@ -159,8 +160,15 @@ class Orchestrator:
 
                 try:
                     timeout = self.config.swarm.tasks.worker_timeout
+
+                    def _on_line(text: str) -> None:
+                        render.render_worker_line(agent_name, text)
+
                     result = await asyncio.wait_for(
-                        agent.execute(task_desc),
+                        agent._run_cli_streaming(
+                            [*agent._build_cmd(), task_desc],
+                            on_line=_on_line,
+                        ),
                         timeout=timeout,
                     )
                     task.complete(result)

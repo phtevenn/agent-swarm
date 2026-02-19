@@ -11,11 +11,9 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.rule import Rule
-from rich.text import Text
 
 console = Console()
 
-_LEAD_STYLE = "cyan"
 _WORKER_STYLE = "blue"
 _SUCCESS_STYLE = "bold green"
 _FAIL_STYLE = "bold red"
@@ -53,6 +51,11 @@ def render_delegation_start(tasks: list[dict]) -> None:
 def render_worker_start(agent_name: str, task: str) -> None:
     """Show a worker starting a task."""
     console.print(f"  [bold blue]▶[/bold blue] [{_WORKER_STYLE}]{agent_name}[/]  {task}")
+
+
+def render_worker_line(agent_name: str, text: str) -> None:
+    """Render a single line of streaming output from a worker."""
+    console.print(f"  [{_DIM}]{agent_name}[/] │ {text}")
 
 
 def render_worker_done(agent_name: str) -> None:
