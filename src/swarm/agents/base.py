@@ -6,7 +6,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 
-from swarm.config.schema import AgentConfig, AgentType
+from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +14,37 @@ logger = logging.getLogger(__name__)
 class BaseAgent(ABC):
     """Common interface that all agent adapters must implement.
 
-    Each adapter wraps a CLI tool (claude, codex, cursor, etc.) and
+    Each adapter wraps a CLI tool (claude, codex, agent, etc.) and
     provides async methods the orchestrator can call.
+
+    The approval_mode is inherited from the swarm-level config so that
+    all agents (lead + workers) operate with the same permission level.
     """
 
     agent_type: AgentType
 
-    def __init__(self, config: AgentConfig, work_dir: str = ".") -> None:
+    def __init__(
+        self,
+        config: AgentConfig,
+        work_dir: str = ".",
+        approval_mode: ApprovalMode = ApprovalMode.DEFAULT,
+    ) -> None:
         self.config = config
         self.work_dir = work_dir
         self.enabled = config.enabled
+        self.approval_mode = approval_mode
 
     @property
     def name(self) -> str:
         return self.config.agent.value
+
+    @abstractmethod
+    def _build_cmd(self) -> list[str]:
+        """Build the base CLI command including approval-mode flags.
+
+        Each adapter must translate self.approval_mode into the correct
+        CLI flags for its underlying tool.
+        """
 
     @abstractmethod
     async def execute(self, title: str, description: str) -> str:

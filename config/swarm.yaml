@@ -3,6 +3,14 @@ swarm:
   # Directory for inter-agent communication
   bus_dir: .swarm
 
+  # Permission level inherited by ALL agents (lead + workers).
+  # Options: full-auto | auto-edit | suggest | default
+  #   full-auto  — no human approval; agents execute everything
+  #   auto-edit  — auto-approve file edits, prompt for shell commands
+  #   suggest    — read-only / plan mode; agents propose but don't execute
+  #   default    — each agent's built-in default behavior
+  approval_mode: full-auto
+
   # Lead agent — receives tasks from the human, delegates to workers
   lead:
     agent: claude-code

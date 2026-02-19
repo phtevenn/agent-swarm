@@ -1,55 +1,87 @@
-"""Adapter for Cursor Agent.
+"""Adapter for Cursor Agent CLI (agent).
 
-Cursor doesn't expose a non-interactive CLI in the same way as Claude Code
-or Codex. This adapter works by writing a task prompt to a file and invoking
-Cursor's terminal command. Richer integration (Phase 2) will use the Cursor
-background agent API once available.
+The `agent` command provides a headless coding agent with --print mode
+for non-interactive use. Permission levels map to:
+  full-auto  → --yolo --trust  (execute everything without prompting)
+  auto-edit  → --trust         (default tool access, trust workspace)
+  suggest    → --mode plan     (read-only planning, no edits)
 """
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
+import json
 
-from swarm.config.schema import AgentConfig, AgentType
+from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 from .base import BaseAgent
 
+_APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
+    ApprovalMode.FULL_AUTO: ["--yolo", "--trust"],
+    ApprovalMode.AUTO_EDIT: ["--trust"],
+    ApprovalMode.SUGGEST: ["--mode", "plan", "--trust"],
+    ApprovalMode.DEFAULT: [],
+}
+
 
 class CursorAgent(BaseAgent):
-    """Wraps the Cursor editor's agent capabilities.
-
-    Current approach: use `cursor` CLI to open a workspace with a task prompt
-    file. This is a scaffolded adapter — full integration depends on Cursor
-    exposing a headless/background agent API.
-    """
+    """Wraps the `agent` CLI (Cursor Agent) in non-interactive print mode."""
 
     agent_type = AgentType.CURSOR
 
-    def __init__(self, config: AgentConfig, work_dir: str = ".") -> None:
-        super().__init__(config, work_dir)
+    def _build_cmd(self) -> list[str]:
+        cmd = ["agent", "--print", "--output-format", "json"]
+        cmd.extend(_APPROVAL_FLAGS.get(self.approval_mode, []))
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+        return cmd
 
     async def health_check(self) -> bool:
         try:
-            await self._run_cli(["cursor", "--version"])
+            await self._run_cli(["agent", "--version"])
             return True
         except Exception:
             return False
 
     async def execute(self, title: str, description: str) -> str:
-        prompt = f"# Task: {title}\n\n{description}" if description else f"# Task: {title}"
-        prompt_file = Path(tempfile.mktemp(suffix=".md", prefix="swarm_task_"))
-        prompt_file.write_text(prompt)
-        try:
-            result = await self._run_cli(
-                ["cursor", "--goto", str(prompt_file)],
-            )
-            return result or f"[cursor] Task prompt delivered: {title}"
-        finally:
-            prompt_file.unlink(missing_ok=True)
+        prompt = f"{title}\n\n{description}" if description else title
+        raw = await self._run_cli([*self._build_cmd(), prompt])
+        return self._extract_result(raw)
 
     async def decompose(self, prompt: str) -> list[dict]:
-        return [{"title": prompt, "description": ""}]
+        full_prompt = (
+            "Break this task into smaller independent subtasks. "
+            "Return a JSON array of objects with 'title' and 'description' fields. "
+            "Return ONLY valid JSON.\n\n"
+            f"Task: {prompt}"
+        )
+        raw = await self._run_cli([*self._build_cmd(), full_prompt])
+        text = self._extract_result(raw)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("[")
+            end = text.rfind("]") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
+            return [{"title": prompt, "description": ""}]
 
     async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
-        return "\n\n".join(f"## {tid}\n{r}" for tid, r in results.items())
+        results_text = "\n\n".join(
+            f"## Subtask {tid}\n{result}" for tid, result in results.items()
+        )
+        prompt = (
+            f"Synthesize these subtask results for the original task: {original_prompt}\n\n"
+            f"{results_text}"
+        )
+        raw = await self._run_cli([*self._build_cmd(), prompt])
+        return self._extract_result(raw)
+
+    def _extract_result(self, raw: str) -> str:
+        """Extract text from agent JSON output, falling back to raw string."""
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data.get("result", data.get("text", raw))
+        except json.JSONDecodeError:
+            pass
+        return raw

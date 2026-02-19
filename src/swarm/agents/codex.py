@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import json
-
-from swarm.config.schema import AgentConfig, AgentType
+from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 from .base import BaseAgent
+
+_APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
+    ApprovalMode.FULL_AUTO: ["--full-auto"],
+    ApprovalMode.AUTO_EDIT: ["--auto-edit"],
+    ApprovalMode.SUGGEST: ["--suggest"],
+    ApprovalMode.DEFAULT: [],
+}
 
 
 class CodexAgent(BaseAgent):
@@ -14,11 +19,12 @@ class CodexAgent(BaseAgent):
 
     agent_type = AgentType.CODEX
 
-    def __init__(self, config: AgentConfig, work_dir: str = ".") -> None:
-        super().__init__(config, work_dir)
-        self._base_cmd = ["codex", "--quiet", "--full-auto"]
-        if config.model:
-            self._base_cmd.extend(["--model", config.model])
+    def _build_cmd(self) -> list[str]:
+        cmd = ["codex", "--quiet"]
+        cmd.extend(_APPROVAL_FLAGS.get(self.approval_mode, []))
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+        return cmd
 
     async def health_check(self) -> bool:
         try:
@@ -29,14 +35,12 @@ class CodexAgent(BaseAgent):
 
     async def execute(self, title: str, description: str) -> str:
         prompt = f"{title}\n\n{description}" if description else title
-        return await self._run_cli([*self._base_cmd, prompt])
+        return await self._run_cli([*self._build_cmd(), prompt])
 
     async def decompose(self, prompt: str) -> list[dict]:
-        # Codex is typically used as a worker, not a decomposer.
-        # Fallback: return the whole task as a single item.
         return [{"title": prompt, "description": ""}]
 
     async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
         results_text = "\n".join(f"- {tid}: {r[:200]}" for tid, r in results.items())
         prompt = f"Summarize these results for: {original_prompt}\n\n{results_text}"
-        return await self._run_cli([*self._base_cmd, prompt])
+        return await self._run_cli([*self._build_cmd(), prompt])

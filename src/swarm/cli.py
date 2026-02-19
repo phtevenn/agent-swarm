@@ -28,9 +28,10 @@ def _setup_logging(verbose: bool) -> None:
 
 def _build_orchestrator(config_path: str) -> Orchestrator:
     config = load_config(config_path)
-    lead = create_agent(config.swarm.lead)
+    mode = config.swarm.approval_mode
+    lead = create_agent(config.swarm.lead, approval_mode=mode)
     workers = [
-        create_agent(wc)
+        create_agent(wc, approval_mode=mode)
         for wc in config.swarm.workers
         if wc.enabled
     ]
@@ -74,10 +75,12 @@ def status(ctx: click.Context) -> None:
         console.print(f"[bold red]Error:[/] {e}")
         sys.exit(1)
 
-    table = Table(title="Agent Status")
+    mode = orch.config.swarm.approval_mode.value
+    table = Table(title=f"Agent Status  [dim](approval: {mode})[/dim]")
     table.add_column("Agent", style="cyan")
     table.add_column("Role", style="magenta")
     table.add_column("Enabled", style="green")
+    table.add_column("Approval", style="yellow")
     table.add_column("State")
 
     statuses = asyncio.run(orch.get_status())
@@ -85,6 +88,7 @@ def status(ctx: click.Context) -> None:
         orch.lead.name,
         "lead",
         "✓" if orch.lead.enabled else "✗",
+        mode,
         statuses.get(orch.lead.name, {}).get("state", "idle"),
     )
     for name, agent in orch.workers.items():
@@ -92,6 +96,7 @@ def status(ctx: click.Context) -> None:
             name,
             "worker",
             "✓" if agent.enabled else "✗",
+            mode,
             statuses.get(name, {}).get("state", "idle"),
         )
 

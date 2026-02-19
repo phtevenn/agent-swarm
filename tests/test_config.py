@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from swarm.config import load_config
-from swarm.config.schema import AgentType, Config
+from swarm.config.schema import AgentType, ApprovalMode, Config
 
 
 def test_load_default_config():
@@ -26,3 +26,8 @@ def test_config_defaults():
     assert config.swarm.tasks.max_parallel == 4
     assert config.discord.enabled is False
     assert config.swarm.bus_dir == Path(".swarm")
+
+
+def test_config_approval_mode():
+    config = load_config("config/swarm.yaml")
+    assert config.swarm.approval_mode == ApprovalMode.FULL_AUTO

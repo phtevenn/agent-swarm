@@ -14,6 +14,18 @@ class AgentType(str, Enum):
     CURSOR = "cursor"
 
 
+class ApprovalMode(str, Enum):
+    """Controls how much autonomy agents have.
+
+    Set at the swarm level — all agents (lead + workers) inherit the same mode.
+    """
+
+    FULL_AUTO = "full-auto"  # No human approval; agents execute everything
+    AUTO_EDIT = "auto-edit"  # Auto-approve file edits, prompt for shell commands
+    SUGGEST = "suggest"      # Read-only / plan mode; agents propose but don't execute
+    DEFAULT = "default"      # Each agent's built-in default behavior
+
+
 class AgentConfig(BaseModel):
     agent: AgentType
     enabled: bool = True
@@ -54,6 +66,7 @@ class TerminalConfig(BaseModel):
 
 class SwarmConfig(BaseModel):
     bus_dir: Path = Path(".swarm")
+    approval_mode: ApprovalMode = ApprovalMode.FULL_AUTO
     lead: AgentConfig
     workers: list[AgentConfig] = Field(default_factory=list)
     tasks: TaskSettings = Field(default_factory=TaskSettings)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from swarm.config.schema import AgentConfig, AgentType
+from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 from .base import BaseAgent
 
@@ -20,17 +20,25 @@ SYNTHESIZE_SYSTEM = (
     "multiple subtasks, produce a concise summary of what was accomplished."
 )
 
+_APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
+    ApprovalMode.FULL_AUTO: ["--dangerously-skip-permissions"],
+    ApprovalMode.AUTO_EDIT: ["--permission-mode", "acceptEdits"],
+    ApprovalMode.SUGGEST: ["--permission-mode", "plan"],
+    ApprovalMode.DEFAULT: [],
+}
+
 
 class ClaudeCodeAgent(BaseAgent):
     """Wraps the `claude` CLI in non-interactive (pipe) mode."""
 
     agent_type = AgentType.CLAUDE_CODE
 
-    def __init__(self, config: AgentConfig, work_dir: str = ".") -> None:
-        super().__init__(config, work_dir)
-        self._base_cmd = ["claude", "--output-format", "json"]
-        if config.model:
-            self._base_cmd.extend(["--model", config.model])
+    def _build_cmd(self) -> list[str]:
+        cmd = ["claude", "--output-format", "json"]
+        cmd.extend(_APPROVAL_FLAGS.get(self.approval_mode, []))
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+        return cmd
 
     async def health_check(self) -> bool:
         try:
@@ -41,7 +49,7 @@ class ClaudeCodeAgent(BaseAgent):
 
     async def execute(self, title: str, description: str) -> str:
         prompt = f"{title}\n\n{description}" if description else title
-        raw = await self._run_cli([*self._base_cmd, "--print", prompt])
+        raw = await self._run_cli([*self._build_cmd(), "--print", prompt])
         return self._extract_result(raw)
 
     async def decompose(self, prompt: str) -> list[dict]:
@@ -50,7 +58,7 @@ class ClaudeCodeAgent(BaseAgent):
             f"Task: {prompt}\n\n"
             "Respond with a JSON array only."
         )
-        raw = await self._run_cli([*self._base_cmd, "--print", full_prompt])
+        raw = await self._run_cli([*self._build_cmd(), "--print", full_prompt])
         text = self._extract_result(raw)
         try:
             return json.loads(text)
@@ -70,7 +78,7 @@ class ClaudeCodeAgent(BaseAgent):
             f"Original task: {original_prompt}\n\n"
             f"Subtask results:\n{results_text}"
         )
-        raw = await self._run_cli([*self._base_cmd, "--print", prompt])
+        raw = await self._run_cli([*self._build_cmd(), "--print", prompt])
         return self._extract_result(raw)
 
     def _extract_result(self, raw: str) -> str:
