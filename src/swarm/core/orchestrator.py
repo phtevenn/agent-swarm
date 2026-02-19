@@ -15,8 +15,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from rich.console import Console
-
+from . import render
 from .message_bus import MessageBus
 from .task import Task, TaskStatus
 
@@ -25,7 +24,6 @@ if TYPE_CHECKING:
     from swarm.config.schema import Config
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 DELEGATE_PATTERN = re.compile(
     r"<swarm:delegate>\s*(.*?)\s*</swarm:delegate>",
@@ -108,8 +106,7 @@ class Orchestrator:
             return response
 
         user_text = DELEGATE_PATTERN.sub("", response).strip()
-        if user_text:
-            console.print(f"\n{user_text}\n")
+        render.render_delegation_header(user_text)
 
         delegation_json = delegation_match.group(1)
         try:
@@ -118,7 +115,9 @@ class Orchestrator:
             logger.warning("Lead emitted malformed delegation block, treating as plain text")
             return response
 
+        render.render_delegation_start(delegation_requests)
         results = await self._run_delegations(delegation_requests)
+        render.render_delegation_end()
 
         results_summary = "\n\n".join(
             f"## Worker: {r['agent']}\n### Task: {r['task']}\n### Result:\n{r['result']}"
@@ -150,13 +149,13 @@ class Orchestrator:
                     error = f"Worker '{agent_name}' not available"
                     task.fail(error)
                     self.bus.publish_task(task)
-                    console.print(f"  [bold red]x[/] {error}")
+                    render.render_worker_fail(agent_name, error)
                     return {"agent": agent_name, "task": task_desc, "result": error}
 
                 task.start()
                 self.bus.publish_task(task)
                 self.bus.update_status(agent_name, {"state": "working", "task_id": task.id})
-                console.print(f"  [bold blue]>[/] {agent_name}: {task_desc}")
+                render.render_worker_start(agent_name, task_desc)
 
                 try:
                     timeout = self.config.swarm.tasks.worker_timeout
@@ -165,16 +164,16 @@ class Orchestrator:
                         timeout=timeout,
                     )
                     task.complete(result)
-                    console.print(f"  [bold green]v[/] {agent_name}: done")
+                    render.render_worker_done(agent_name)
                     return {"agent": agent_name, "task": task_desc, "result": result}
                 except asyncio.TimeoutError:
                     error = f"Timed out after {timeout}s"
                     task.fail(error)
-                    console.print(f"  [bold red]x[/] {agent_name}: {error}")
+                    render.render_worker_fail(agent_name, error)
                     return {"agent": agent_name, "task": task_desc, "result": error}
                 except Exception as exc:
                     task.fail(str(exc))
-                    console.print(f"  [bold red]x[/] {agent_name}: {exc}")
+                    render.render_worker_fail(agent_name, str(exc))
                     return {"agent": agent_name, "task": task_desc, "result": str(exc)}
                 finally:
                     self.bus.publish_task(task)

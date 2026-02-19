@@ -25,6 +25,7 @@ from swarm.agents import create_agent
 from swarm.config import load_config, load_config_with_fallback
 from swarm.config.schema import Config
 from swarm.core import Orchestrator
+from swarm.core.render import render_error, render_response
 from swarm.core.trust import (
     is_workspace_trusted,
     requires_trust,
@@ -134,12 +135,12 @@ def _interactive_loop(orch: Orchestrator) -> None:
 
         try:
             response = asyncio.run(orch.chat(message))
-            console.print(f"\n{response}\n")
+            render_response(response, agent_name=orch.lead.name)
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/]\n")
             asyncio.run(orch.cancel_all())
         except Exception as exc:
-            console.print(f"\n[bold red]Error:[/] {exc}\n")
+            render_error(str(exc))
 
 
 def _handle_command(cmd: str, orch: Orchestrator) -> bool:
@@ -260,9 +261,9 @@ def main(
     if prompt:
         try:
             response = asyncio.run(orch.chat(prompt))
-            console.print(f"\n{response}")
+            render_response(response, agent_name=orch.lead.name)
         except Exception as exc:
-            console.print(f"\n[bold red]Error:[/] {exc}")
+            render_error(str(exc))
             sys.exit(1)
     else:
         _interactive_loop(orch)
