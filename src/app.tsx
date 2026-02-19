@@ -11,7 +11,7 @@ import type { AppProps, ChatMessage, WorkerState, DelegateRequest, WorkerResult 
 let msgCounter = 0;
 const mkId = () => `msg-${++msgCounter}`;
 
-export default function App({ prompt, verbose, trust, config: configPath }: AppProps) {
+export default function App({ prompt, verbose, cfg: initialCfg, configSource: initialConfigSource }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -80,33 +80,21 @@ export default function App({ prompt, verbose, trust, config: configPath }: AppP
     onLeadChunk, onLeadDone, onDelegateStart, onWorkerLine, onWorkerDone, onWorkerFail, onDelegateEnd,
   });
 
-  // Initialize orchestrator on mount
+  // Initialize orchestrator on mount.
+  // Trust check and config loading already handled in cli.tsx before render().
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const { loadConfigWithFallback } = await import('./lib/config/loader.js');
         const { createAgent } = await import('./lib/agents/index.js');
         const { Orchestrator } = await import('./lib/orchestrator.js');
-        const { isWorkspaceTrusted, requiresTrust, trustWorkspace } = await import('./lib/trust.js');
+        const { loadConfigWithFallback } = await import('./lib/config/loader.js');
 
-        const [cfg, source] = loadConfigWithFallback(configPath);
+        const [cfg, source] = initialCfg
+          ? [initialCfg, initialConfigSource ?? 'config']
+          : loadConfigWithFallback();
         const cwd = process.cwd();
         const mode = cfg.swarm.approval_mode;
-
-        // Trust check
-        if (requiresTrust(mode) && !trust && !isWorkspaceTrusted(cwd)) {
-          setMessages(m => [...m, {
-            id: mkId(), role: 'system', timestamp: Date.now(),
-            text: `Workspace not trusted for mode '${mode}'. Run: swarm trust`,
-          }]);
-          if (cancelled) return;
-          setTimeout(() => exit(), 100);
-          return;
-        }
-        if (trust && requiresTrust(mode)) {
-          trustWorkspace(cwd);
-        }
 
         const lead = createAgent(cfg.swarm.lead, cwd, mode);
         const workerAgents = cfg.swarm.workers

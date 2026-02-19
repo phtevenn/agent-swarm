@@ -2,6 +2,8 @@
 import React from 'react';
 import { render } from 'ink';
 import { Command } from 'commander';
+import { loadConfigWithFallback } from './lib/config/loader.js';
+import { requiresTrust, isWorkspaceTrusted, trustWorkspace } from './lib/trust.js';
 import App from './app.js';
 import type { AppProps } from './types.js';
 
@@ -87,7 +89,35 @@ program.parse();
 const opts = program.opts<AppProps>();
 
 // Only render Ink UI if no subcommand was invoked
-// commander handles subcommands -- this block runs for the root command
 if (!process.argv.slice(2).some(a => ['trust', 'status', 'check'].includes(a))) {
-  render(<App {...opts} />);
+  const cwd = process.cwd();
+
+  // Load config and check trust before launching Ink.
+  // Doing this here gives a plain, visible error instead of a brief Ink flash.
+  let cfg;
+  let configSource: string;
+  try {
+    [cfg, configSource] = loadConfigWithFallback(opts.config);
+  } catch (err) {
+    console.error(`Error loading config: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
+  const mode = cfg.swarm.approval_mode;
+
+  if (opts.trust && requiresTrust(mode)) {
+    trustWorkspace(cwd);
+  }
+
+  if (requiresTrust(mode) && !opts.trust && !isWorkspaceTrusted(cwd)) {
+    console.error(
+      `\nWorkspace not trusted: ${cwd}\n` +
+      `Approval mode '${mode}' grants agents elevated permissions in this directory.\n\n` +
+      `  swarm trust          Trust permanently\n` +
+      `  swarm --trust        Trust for this session only\n`,
+    );
+    process.exit(1);
+  }
+
+  render(<App {...opts} cfg={cfg} configSource={configSource} />);
 }

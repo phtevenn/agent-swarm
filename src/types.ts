@@ -77,4 +77,7 @@ export interface AppProps {
   verbose?: boolean;
   tmux?: boolean;
   iterm2?: boolean;
+  // Pre-loaded by cli.tsx before render() so App never needs to handle trust failures
+  cfg?: import('./lib/config/schema.js').Config;
+  configSource?: string;
 }
