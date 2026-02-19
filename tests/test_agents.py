@@ -86,6 +86,8 @@ def test_codex_full_auto_flags():
         approval_mode=ApprovalMode.FULL_AUTO,
     )
     cmd = agent._build_cmd()
+    assert cmd[0] == "codex"
+    assert cmd[1] == "exec"
     assert "--full-auto" in cmd
 
 
@@ -95,7 +97,26 @@ def test_codex_auto_edit_flags():
         approval_mode=ApprovalMode.AUTO_EDIT,
     )
     cmd = agent._build_cmd()
-    assert "--auto-edit" in cmd
+    assert "-a" in cmd
+    idx = cmd.index("-a")
+    assert cmd[idx + 1] == "on-request"
+    assert "-s" in cmd
+    idx = cmd.index("-s")
+    assert cmd[idx + 1] == "workspace-write"
+
+
+def test_codex_suggest_flags():
+    agent = create_agent(
+        AgentConfig(agent=AgentType.CODEX),
+        approval_mode=ApprovalMode.SUGGEST,
+    )
+    cmd = agent._build_cmd()
+    assert "-a" in cmd
+    idx = cmd.index("-a")
+    assert cmd[idx + 1] == "untrusted"
+    assert "-s" in cmd
+    idx = cmd.index("-s")
+    assert cmd[idx + 1] == "read-only"
 
 
 def test_cursor_full_auto_flags():
