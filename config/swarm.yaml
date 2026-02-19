@@ -1,0 +1,42 @@
+# Agent Swarm configuration
+swarm:
+  # Directory for inter-agent communication
+  bus_dir: .swarm
+
+  # Lead agent — receives tasks from the human, delegates to workers
+  lead:
+    agent: claude-code
+    # Optional: model override, timeout, etc.
+    # model: claude-sonnet-4-20250514
+    # timeout: 300
+
+  # Worker agents — receive delegated subtasks from the lead
+  workers:
+    - agent: codex
+      # enabled: true
+      # max_concurrent_tasks: 2
+    - agent: cursor
+      # enabled: true
+      # max_concurrent_tasks: 1
+
+  # Task settings
+  tasks:
+    # Max time (seconds) to wait for a worker to complete a subtask
+    worker_timeout: 600
+    # Max number of subtasks running in parallel
+    max_parallel: 4
+
+# Phase 2: Discord integration
+# discord:
+#   enabled: false
+#   token_env: DISCORD_BOT_TOKEN
+#   channel_id: null
+#   notify_on:
+#     - task_started
+#     - task_completed
+#     - task_failed
+
+# Phase 2: Terminal layout
+# terminal:
+#   backend: tmux        # tmux | iterm2
+#   layout: tiled        # tiled | horizontal | vertical
