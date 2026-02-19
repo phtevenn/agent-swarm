@@ -33,6 +33,7 @@ class BaseAgent(ABC):
         self.work_dir = work_dir
         self.enabled = config.enabled
         self.approval_mode = approval_mode
+        self._session_started = False
 
     @property
     def name(self) -> str:
@@ -40,26 +41,28 @@ class BaseAgent(ABC):
 
     @abstractmethod
     def _build_cmd(self) -> list[str]:
-        """Build the base CLI command including approval-mode flags.
+        """Build the base CLI command including approval-mode flags."""
 
-        Each adapter must translate self.approval_mode into the correct
-        CLI flags for its underlying tool.
+    @abstractmethod
+    async def send(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        continue_session: bool = False,
+    ) -> str:
+        """Send a conversational message and return the response.
+
+        Used for lead-agent interaction. Supports session continuity
+        via continue_session so the agent retains context.
         """
 
     @abstractmethod
-    async def execute(self, title: str, description: str) -> str:
-        """Execute a task and return the result as a string."""
+    async def execute(self, task: str, context: str = "") -> str:
+        """Execute a one-shot task and return the result.
 
-    @abstractmethod
-    async def decompose(self, prompt: str) -> list[dict]:
-        """Break a high-level prompt into a list of subtask dicts.
-
-        Each dict should have at least: {"title": str, "description": str}
+        Used for worker agents receiving delegated subtasks.
+        No session continuity — each call is independent.
         """
-
-    @abstractmethod
-    async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
-        """Synthesize multiple subtask results into a final answer."""
 
     async def health_check(self) -> bool:
         """Verify the underlying CLI tool is reachable."""

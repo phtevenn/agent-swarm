@@ -15,7 +15,7 @@ _APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
 
 
 class CodexAgent(BaseAgent):
-    """Wraps the `codex` CLI."""
+    """Wraps the `codex` CLI. Primarily used as a worker agent."""
 
     agent_type = AgentType.CODEX
 
@@ -33,14 +33,14 @@ class CodexAgent(BaseAgent):
         except Exception:
             return False
 
-    async def execute(self, title: str, description: str) -> str:
-        prompt = f"{title}\n\n{description}" if description else title
-        return await self._run_cli([*self._build_cmd(), prompt])
+    async def send(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        continue_session: bool = False,
+    ) -> str:
+        return await self.execute(message)
 
-    async def decompose(self, prompt: str) -> list[dict]:
-        return [{"title": prompt, "description": ""}]
-
-    async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
-        results_text = "\n".join(f"- {tid}: {r[:200]}" for tid, r in results.items())
-        prompt = f"Summarize these results for: {original_prompt}\n\n{results_text}"
+    async def execute(self, task: str, context: str = "") -> str:
+        prompt = f"{task}\n\n{context}" if context else task
         return await self._run_cli([*self._build_cmd(), prompt])

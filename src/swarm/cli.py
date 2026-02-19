@@ -114,29 +114,29 @@ def _print_banner(config: Config, config_source: str) -> None:
 
 
 def _interactive_loop(orch: Orchestrator) -> None:
-    """REPL: prompt for tasks, run them through the orchestrator."""
-    console.print("[dim]Type a task to delegate, or /help for commands. Ctrl+C to exit.[/]\n")
+    """REPL: conversational interface to the lead agent."""
+    console.print("[dim]Talk to the lead agent, or /help for commands. Ctrl+C to exit.[/]\n")
 
     while True:
         try:
-            task = console.input("[bold green]swarm>[/] ").strip()
+            message = console.input("[bold green]swarm>[/] ").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Goodbye.[/]")
             break
 
-        if not task:
+        if not message:
             continue
 
-        if task.startswith("/"):
-            if _handle_command(task, orch):
+        if message.startswith("/"):
+            if _handle_command(message, orch):
                 break
             continue
 
         try:
-            result = asyncio.run(orch.run_task(task))
-            console.print(f"\n[bold green]Result:[/]\n{result}\n")
+            response = asyncio.run(orch.chat(message))
+            console.print(f"\n{response}\n")
         except KeyboardInterrupt:
-            console.print("\n[yellow]Task interrupted.[/]\n")
+            console.print("\n[yellow]Interrupted.[/]\n")
             asyncio.run(orch.cancel_all())
         except Exception as exc:
             console.print(f"\n[bold red]Error:[/] {exc}\n")
@@ -259,8 +259,8 @@ def main(
 
     if prompt:
         try:
-            result = asyncio.run(orch.run_task(prompt))
-            console.print(f"\n[bold green]Result:[/]\n{result}")
+            response = asyncio.run(orch.chat(prompt))
+            console.print(f"\n{response}")
         except Exception as exc:
             console.print(f"\n[bold red]Error:[/] {exc}")
             sys.exit(1)

@@ -1,9 +1,18 @@
-"""Core orchestrator — coordinates the lead agent and worker agents."""
+"""Core orchestrator — the lead agent is conversational and decides delegation.
+
+The human talks to the lead agent like any other coding agent. The lead has a
+system prompt describing its available workers and a delegation protocol. When
+the lead wants to fan out work, it emits <swarm:delegate> blocks. The
+orchestrator intercepts those, runs the tasks on workers, and feeds results
+back to the lead.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -18,16 +27,55 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 console = Console()
 
+DELEGATE_PATTERN = re.compile(
+    r"<swarm:delegate>\s*(.*?)\s*</swarm:delegate>",
+    re.DOTALL,
+)
+
+
+def _build_system_prompt(workers: dict[str, BaseAgent]) -> str:
+    """Build the system prompt that tells the lead about its delegation powers."""
+    if not workers:
+        return ""
+
+    worker_lines = []
+    for name, agent in workers.items():
+        if agent.enabled:
+            worker_lines.append(f"  - {name}")
+
+    workers_list = "\n".join(worker_lines)
+
+    return (
+        "You are the lead agent in a coding agent swarm. You have worker agents "
+        "available that you can delegate tasks to. You should work like a normal "
+        "coding agent — answer questions, write code, make edits directly. "
+        "Delegation is optional; use it when:\n"
+        "  - The task is large and can be parallelized\n"
+        "  - The user explicitly asks you to delegate\n"
+        "  - Different subtasks are independent and would benefit from parallel execution\n"
+        "\n"
+        "Available workers:\n"
+        f"{workers_list}\n"
+        "\n"
+        "To delegate, include a block like this in your response:\n"
+        "\n"
+        "<swarm:delegate>\n"
+        '[{"agent": "worker-name", "task": "description of what to do"}]\n'
+        "</swarm:delegate>\n"
+        "\n"
+        "You can include multiple tasks in the array. Any text outside the delegate "
+        "block is shown to the user normally. After delegation completes, you will "
+        "receive the results and can respond to the user.\n"
+        "\n"
+        "If delegation is unnecessary, just respond normally without any delegate block."
+    )
+
 
 class Orchestrator:
-    """Manages agent lifecycle and task delegation.
+    """Manages conversational interaction with the lead and delegation to workers.
 
-    Flow:
-    1. Human submits a top-level task via CLI
-    2. Lead agent decomposes it into subtasks
-    3. Orchestrator assigns subtasks to available workers
-    4. Workers execute and report back through the message bus
-    5. Lead agent synthesizes results
+    The lead agent is the primary interface — the human talks to it directly.
+    The orchestrator intercepts delegation requests and manages worker execution.
     """
 
     def __init__(self, config: Config, lead: BaseAgent, workers: list[BaseAgent]) -> None:
@@ -35,113 +83,106 @@ class Orchestrator:
         self.lead = lead
         self.workers = {w.name: w for w in workers}
         self.bus = MessageBus(config.swarm.bus_dir)
+        self._system_prompt = _build_system_prompt(self.workers)
         self._active_tasks: dict[str, asyncio.Task] = {}
 
     @property
     def all_agents(self) -> dict[str, BaseAgent]:
         return {self.lead.name: self.lead, **self.workers}
 
-    async def run_task(self, prompt: str) -> str:
-        """Execute a full orchestration cycle for a human-submitted task."""
-        root_task = Task(title=prompt, created_by="human")
-        self.bus.publish_task(root_task)
+    async def chat(self, message: str) -> str:
+        """Send a message to the lead agent and handle any delegation.
 
-        console.print(f"[bold green]Task created:[/] {root_task.id}")
-        console.print(f"[dim]Lead agent:[/] {self.lead.name}")
+        This is the main entry point. The lead responds conversationally.
+        If its response contains <swarm:delegate> blocks, the orchestrator
+        runs those tasks on workers and feeds results back to the lead.
+        """
+        response = await self.lead.send(
+            message,
+            system_prompt=self._system_prompt or None,
+            continue_session=True,
+        )
 
-        subtasks = await self._decompose(root_task)
+        delegation_match = DELEGATE_PATTERN.search(response)
+        if not delegation_match:
+            return response
 
-        if not subtasks:
-            console.print("[yellow]Lead agent returned no subtasks — executing directly.[/]")
-            return await self._execute_single(root_task)
+        user_text = DELEGATE_PATTERN.sub("", response).strip()
+        if user_text:
+            console.print(f"\n{user_text}\n")
 
-        results = await self._execute_parallel(subtasks)
+        delegation_json = delegation_match.group(1)
+        try:
+            delegation_requests = json.loads(delegation_json)
+        except json.JSONDecodeError:
+            logger.warning("Lead emitted malformed delegation block, treating as plain text")
+            return response
 
-        synthesis = await self._synthesize(root_task, results)
-        root_task.complete(synthesis)
-        self.bus.publish_task(root_task)
-        return synthesis
+        results = await self._run_delegations(delegation_requests)
 
-    async def _decompose(self, root_task: Task) -> list[Task]:
-        """Ask the lead agent to break a task into subtasks."""
-        console.print("[bold]Decomposing task...[/]")
-        decomposition = await self.lead.decompose(root_task.title)
+        results_summary = "\n\n".join(
+            f"## Worker: {r['agent']}\n### Task: {r['task']}\n### Result:\n{r['result']}"
+            for r in results
+        )
+        followup = (
+            f"The following delegated tasks have completed:\n\n{results_summary}\n\n"
+            "Please review the results and provide a summary to the user."
+        )
 
-        subtasks = []
-        available_workers = [n for n, w in self.workers.items() if w.enabled]
+        return await self.lead.send(followup, continue_session=True)
 
-        for i, item in enumerate(decomposition):
-            worker_name = available_workers[i % len(available_workers)] if available_workers else self.lead.name
-            subtask = Task(
-                parent_id=root_task.id,
-                title=item["title"],
-                description=item.get("description", ""),
-                created_by=self.lead.name,
-            )
-            subtask.assign(worker_name)
-            self.bus.publish_task(subtask)
-            subtasks.append(subtask)
-            console.print(f"  [cyan]→ {subtask.id}[/] [{worker_name}] {subtask.title}")
-
-        return subtasks
-
-    async def _execute_single(self, task: Task) -> str:
-        """Execute a task directly with the lead agent (no decomposition)."""
-        task.start()
-        self.bus.publish_task(task)
-        result = await self.lead.execute(task.title, task.description)
-        task.complete(result)
-        self.bus.publish_task(task)
-        return result
-
-    async def _execute_parallel(self, subtasks: list[Task]) -> dict[str, str]:
-        """Run subtasks on their assigned workers, respecting max_parallel."""
+    async def _run_delegations(self, requests: list[dict]) -> list[dict]:
+        """Execute delegation requests on worker agents in parallel."""
         sem = asyncio.Semaphore(self.config.swarm.tasks.max_parallel)
-        results: dict[str, str] = {}
+        results: list[dict] = []
 
-        async def _run(subtask: Task) -> None:
+        async def _run_one(req: dict) -> dict:
             async with sem:
-                agent_name = subtask.assigned_to
-                agent = self.all_agents.get(agent_name)
-                if agent is None:
-                    subtask.fail(f"No agent found with name '{agent_name}'")
-                    self.bus.publish_task(subtask)
-                    return
+                agent_name = req.get("agent", "")
+                task_desc = req.get("task", "")
+                agent = self.workers.get(agent_name)
 
-                subtask.start()
-                self.bus.publish_task(subtask)
-                self.bus.update_status(agent_name, {
-                    "state": "working",
-                    "task_id": subtask.id,
-                })
-                console.print(f"  [bold blue]▶[/] {agent_name} starting: {subtask.title}")
+                task = Task(title=task_desc, assigned_to=agent_name, created_by=self.lead.name)
+                task.assign(agent_name)
+                self.bus.publish_task(task)
+
+                if agent is None or not agent.enabled:
+                    error = f"Worker '{agent_name}' not available"
+                    task.fail(error)
+                    self.bus.publish_task(task)
+                    console.print(f"  [bold red]x[/] {error}")
+                    return {"agent": agent_name, "task": task_desc, "result": error}
+
+                task.start()
+                self.bus.publish_task(task)
+                self.bus.update_status(agent_name, {"state": "working", "task_id": task.id})
+                console.print(f"  [bold blue]>[/] {agent_name}: {task_desc}")
 
                 try:
                     timeout = self.config.swarm.tasks.worker_timeout
                     result = await asyncio.wait_for(
-                        agent.execute(subtask.title, subtask.description),
+                        agent.execute(task_desc),
                         timeout=timeout,
                     )
-                    subtask.complete(result)
-                    results[subtask.id] = result
-                    console.print(f"  [bold green]✓[/] {agent_name} completed: {subtask.title}")
+                    task.complete(result)
+                    console.print(f"  [bold green]v[/] {agent_name}: done")
+                    return {"agent": agent_name, "task": task_desc, "result": result}
                 except asyncio.TimeoutError:
-                    subtask.fail(f"Timed out after {timeout}s")
-                    console.print(f"  [bold red]✗[/] {agent_name} timed out: {subtask.title}")
+                    error = f"Timed out after {timeout}s"
+                    task.fail(error)
+                    console.print(f"  [bold red]x[/] {agent_name}: {error}")
+                    return {"agent": agent_name, "task": task_desc, "result": error}
                 except Exception as exc:
-                    subtask.fail(str(exc))
-                    console.print(f"  [bold red]✗[/] {agent_name} failed: {exc}")
+                    task.fail(str(exc))
+                    console.print(f"  [bold red]x[/] {agent_name}: {exc}")
+                    return {"agent": agent_name, "task": task_desc, "result": str(exc)}
                 finally:
-                    self.bus.publish_task(subtask)
+                    self.bus.publish_task(task)
                     self.bus.update_status(agent_name, {"state": "idle"})
 
-        await asyncio.gather(*[_run(st) for st in subtasks])
+        completed = await asyncio.gather(*[_run_one(req) for req in requests])
+        results.extend(completed)
         return results
-
-    async def _synthesize(self, root_task: Task, results: dict[str, str]) -> str:
-        """Ask the lead agent to synthesize subtask results."""
-        console.print("[bold]Synthesizing results...[/]")
-        return await self.lead.synthesize(root_task.title, results)
 
     async def get_status(self) -> dict:
         """Return current status of all agents."""

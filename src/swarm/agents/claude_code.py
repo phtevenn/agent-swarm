@@ -8,18 +8,6 @@ from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 from .base import BaseAgent
 
-DECOMPOSE_SYSTEM = (
-    "You are a task decomposer. Given a high-level coding task, break it into "
-    "smaller independent subtasks that can be delegated to different agents. "
-    "Return a JSON array of objects with 'title' and 'description' fields. "
-    "Return ONLY valid JSON, no markdown."
-)
-
-SYNTHESIZE_SYSTEM = (
-    "You are a result synthesizer. Given the original task and results from "
-    "multiple subtasks, produce a concise summary of what was accomplished."
-)
-
 _APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
     ApprovalMode.FULL_AUTO: ["--dangerously-skip-permissions"],
     ApprovalMode.AUTO_EDIT: ["--permission-mode", "acceptEdits"],
@@ -29,7 +17,11 @@ _APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
 
 
 class ClaudeCodeAgent(BaseAgent):
-    """Wraps the `claude` CLI in non-interactive (pipe) mode."""
+    """Wraps the `claude` CLI.
+
+    Lead mode: conversational with --print and --continue for session continuity.
+    Worker mode: one-shot --print for delegated tasks.
+    """
 
     agent_type = AgentType.CLAUDE_CODE
 
@@ -47,37 +39,25 @@ class ClaudeCodeAgent(BaseAgent):
         except Exception:
             return False
 
-    async def execute(self, title: str, description: str) -> str:
-        prompt = f"{title}\n\n{description}" if description else title
-        raw = await self._run_cli([*self._build_cmd(), "--print", prompt])
+    async def send(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        continue_session: bool = False,
+    ) -> str:
+        cmd = self._build_cmd()
+        if system_prompt:
+            cmd.extend(["--append-system-prompt", system_prompt])
+        if continue_session and self._session_started:
+            cmd.append("--continue")
+        cmd.extend(["--print", message])
+
+        raw = await self._run_cli(cmd)
+        self._session_started = True
         return self._extract_result(raw)
 
-    async def decompose(self, prompt: str) -> list[dict]:
-        full_prompt = (
-            f"System: {DECOMPOSE_SYSTEM}\n\n"
-            f"Task: {prompt}\n\n"
-            "Respond with a JSON array only."
-        )
-        raw = await self._run_cli([*self._build_cmd(), "--print", full_prompt])
-        text = self._extract_result(raw)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("[")
-            end = text.rfind("]") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-            return [{"title": prompt, "description": ""}]
-
-    async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
-        results_text = "\n\n".join(
-            f"## Subtask {tid}\n{result}" for tid, result in results.items()
-        )
-        prompt = (
-            f"System: {SYNTHESIZE_SYSTEM}\n\n"
-            f"Original task: {original_prompt}\n\n"
-            f"Subtask results:\n{results_text}"
-        )
+    async def execute(self, task: str, context: str = "") -> str:
+        prompt = f"{task}\n\n{context}" if context else task
         raw = await self._run_cli([*self._build_cmd(), "--print", prompt])
         return self._extract_result(raw)
 

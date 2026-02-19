@@ -2,9 +2,9 @@
 
 The `agent` command provides a headless coding agent with --print mode
 for non-interactive use. Permission levels map to:
-  full-auto  → --yolo --trust  (execute everything without prompting)
-  auto-edit  → --trust         (default tool access, trust workspace)
-  suggest    → --mode plan     (read-only planning, no edits)
+  full-auto  -> --yolo --trust  (execute everything without prompting)
+  auto-edit  -> --trust         (default tool access, trust workspace)
+  suggest    -> --mode plan     (read-only planning, no edits)
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ _APPROVAL_FLAGS: dict[ApprovalMode, list[str]] = {
 
 
 class CursorAgent(BaseAgent):
-    """Wraps the `agent` CLI (Cursor Agent) in non-interactive print mode."""
+    """Wraps the `agent` CLI (Cursor Agent).
+
+    Lead mode: conversational with --print and --continue for session continuity.
+    Worker mode: one-shot --print for delegated tasks.
+    """
 
     agent_type = AgentType.CURSOR
 
@@ -42,37 +46,23 @@ class CursorAgent(BaseAgent):
         except Exception:
             return False
 
-    async def execute(self, title: str, description: str) -> str:
-        prompt = f"{title}\n\n{description}" if description else title
-        raw = await self._run_cli([*self._build_cmd(), prompt])
+    async def send(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        continue_session: bool = False,
+    ) -> str:
+        cmd = self._build_cmd()
+        if continue_session and self._session_started:
+            cmd.append("--continue")
+        cmd.append(message)
+
+        raw = await self._run_cli(cmd)
+        self._session_started = True
         return self._extract_result(raw)
 
-    async def decompose(self, prompt: str) -> list[dict]:
-        full_prompt = (
-            "Break this task into smaller independent subtasks. "
-            "Return a JSON array of objects with 'title' and 'description' fields. "
-            "Return ONLY valid JSON.\n\n"
-            f"Task: {prompt}"
-        )
-        raw = await self._run_cli([*self._build_cmd(), full_prompt])
-        text = self._extract_result(raw)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("[")
-            end = text.rfind("]") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-            return [{"title": prompt, "description": ""}]
-
-    async def synthesize(self, original_prompt: str, results: dict[str, str]) -> str:
-        results_text = "\n\n".join(
-            f"## Subtask {tid}\n{result}" for tid, result in results.items()
-        )
-        prompt = (
-            f"Synthesize these subtask results for the original task: {original_prompt}\n\n"
-            f"{results_text}"
-        )
+    async def execute(self, task: str, context: str = "") -> str:
+        prompt = f"{task}\n\n{context}" if context else task
         raw = await self._run_cli([*self._build_cmd(), prompt])
         return self._extract_result(raw)
 

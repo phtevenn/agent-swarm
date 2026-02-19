@@ -134,3 +134,11 @@ def test_model_override_in_cmd():
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "test-model"
+
+
+# --- Session tracking ---
+
+
+def test_session_not_started_initially():
+    agent = create_agent(AgentConfig(agent=AgentType.CLAUDE_CODE))
+    assert agent._session_started is False
