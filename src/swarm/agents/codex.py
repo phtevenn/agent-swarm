@@ -27,7 +27,7 @@ class CodexAgent(BaseAgent):
     agent_type = AgentType.CODEX
 
     def _build_cmd(self) -> list[str]:
-        cmd = ["codex", "exec"]
+        cmd = ["codex", "exec", "--skip-git-repo-check"]
         cmd.extend(_APPROVAL_FLAGS.get(self.approval_mode, []))
         if self.config.model:
             cmd.extend(["--model", self.config.model])
