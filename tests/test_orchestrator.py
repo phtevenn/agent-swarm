@@ -4,7 +4,15 @@ import json
 
 from swarm.agents import create_agent
 from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
-from swarm.core.orchestrator import DELEGATE_PATTERN, _build_system_prompt
+from swarm.core.orchestrator import (
+    DELEGATE_PATTERN,
+    _build_followup,
+    _build_results_summary,
+    _build_system_prompt,
+    _classify_failure,
+    FAILURE_KIND_RATE_LIMIT,
+    FAILURE_KIND_TIMEOUT,
+)
 
 
 def test_delegate_pattern_matches():
@@ -77,3 +85,44 @@ def test_build_system_prompt_skips_disabled():
     lines = [l.strip() for l in prompt.split("\n") if l.strip().startswith("- ")]
     agent_names = [l.lstrip("- ") for l in lines]
     assert "codex" not in agent_names
+
+
+def test_build_system_prompt_mentions_redelegate_on_failure():
+    workers = {"codex": create_agent(AgentConfig(agent=AgentType.CODEX))}
+    prompt = _build_system_prompt(workers)
+    assert "failed" in prompt.lower()
+    assert "re-delegate" in prompt or "Re-delegate" in prompt
+
+
+def test_classify_failure_rate_limit():
+    assert _classify_failure("429 Too Many Requests") == FAILURE_KIND_RATE_LIMIT
+    assert _classify_failure("rateLimitExceeded") == FAILURE_KIND_RATE_LIMIT
+
+
+def test_classify_failure_timeout():
+    assert _classify_failure("Timed out after 120s") == FAILURE_KIND_TIMEOUT
+
+
+def test_classify_failure_empty():
+    assert _classify_failure("") is None
+
+
+def test_build_results_summary_includes_failed_status():
+    results = [
+        {"agent": "codex", "task": "do A", "result": "done", "status": "ok"},
+        {"agent": "gemini", "task": "do B", "result": "429", "status": "failed", "failure_kind": FAILURE_KIND_RATE_LIMIT},
+    ]
+    summary = _build_results_summary(results)
+    assert "FAILED" in summary
+    assert "rate_limit" in summary
+    assert "codex" in summary
+    assert "gemini" in summary
+
+
+def test_build_followup_instructs_redelegate_when_failed():
+    results = [
+        {"agent": "gemini", "task": "run X", "result": "429", "status": "failed", "failure_kind": FAILURE_KIND_RATE_LIMIT},
+    ]
+    followup = _build_followup(results)
+    assert "failed" in followup.lower()
+    assert "re-delegate" in followup or "<swarm:delegate>" in followup

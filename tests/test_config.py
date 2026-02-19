@@ -58,7 +58,12 @@ def test_find_config_discovers_config_subdir(tmp_path: Path):
     assert str(found).endswith("config/swarm.yaml")
 
 
-def test_find_config_returns_none(tmp_path: Path):
+def test_find_config_returns_none(tmp_path: Path, monkeypatch):
+    """When cwd has no config, find_config returns None only if global config is absent."""
+    monkeypatch.setattr(
+        "swarm.config.loader.GLOBAL_CONFIG",
+        tmp_path / "no_global_swarm.yaml",
+    )
     assert find_config(tmp_path) is None
 
 

@@ -1,6 +1,6 @@
 # Agent Swarm
 
-Orchestration framework for coordinating multiple coding agents (Claude Code, Codex, Cursor Agent).
+Orchestration framework for coordinating multiple coding agents (Claude Code, Codex, Cursor Agent, Gemini).
 
 > **Status:** Early development — Phase 1 core complete, Phase 2 scaffolded
 
@@ -35,8 +35,9 @@ src/swarm/
 ├── agents/
 │   ├── base.py             # BaseAgent ABC with async subprocess helper
 │   ├── claude_code.py      # `claude` CLI adapter (JSON output mode)
-│   ├── codex.py            # `codex` CLI adapter (quiet/full-auto)
-│   └── cursor.py           # Cursor adapter (scaffolded)
+│   ├── codex.py            # `codex` CLI adapter
+│   ├── cursor.py           # Cursor Agent (`agent` CLI)
+│   └── gemini.py           # Google Gemini CLI (`gemini`)
 ├── discord/
 │   └── bot.py              # Discord status notifications (Phase 2)
 └── terminal/
@@ -47,10 +48,11 @@ src/swarm/
 ### Supported Agents
 
 | Agent        | Role Support   | Spawn Method    | Status       |
-|-------------|---------------|-----------------|-------------|
-| Claude Code | Lead / Worker | `claude` CLI    | Implemented |
-| Codex       | Worker        | `codex` CLI     | Implemented |
-| Cursor      | Worker        | `cursor` CLI    | Scaffolded  |
+|-------------|----------------|-----------------|-------------|
+| Claude Code | Lead / Worker | `claude` CLI   | Implemented |
+| Codex       | Worker        | `codex` CLI    | Implemented |
+| Cursor      | Worker        | `agent` CLI    | Implemented |
+| Gemini      | Lead / Worker | `gemini` CLI   | Implemented |
 
 ### Communication
 
@@ -101,7 +103,7 @@ Edit `config/swarm.yaml` to change which agent leads, which agents are workers, 
 ```yaml
 swarm:
   lead:
-    agent: claude-code       # claude-code | codex | cursor
+    agent: claude-code       # claude-code | codex | cursor | gemini
     # model: claude-sonnet-4-20250514
     # timeout: 300
   workers:
@@ -109,6 +111,8 @@ swarm:
       # max_concurrent_tasks: 2
     - agent: cursor
       # enabled: false
+    # - agent: gemini
+    #   enabled: true
   tasks:
     worker_timeout: 600      # seconds per subtask
     max_parallel: 4          # concurrent subtasks

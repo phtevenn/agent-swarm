@@ -5,6 +5,7 @@ from swarm.agents.base import BaseAgent
 from swarm.agents.claude_code import ClaudeCodeAgent
 from swarm.agents.codex import CodexAgent
 from swarm.agents.cursor import CursorAgent
+from swarm.agents.gemini import GeminiAgent
 from swarm.config.schema import AgentConfig, AgentType, ApprovalMode
 
 
@@ -12,6 +13,7 @@ def test_registry_has_all_agents():
     assert AgentType.CLAUDE_CODE in AGENT_REGISTRY
     assert AgentType.CODEX in AGENT_REGISTRY
     assert AgentType.CURSOR in AGENT_REGISTRY
+    assert AgentType.GEMINI in AGENT_REGISTRY
 
 
 def test_create_claude_code():
@@ -30,6 +32,12 @@ def test_create_cursor():
     agent = create_agent(AgentConfig(agent=AgentType.CURSOR))
     assert isinstance(agent, CursorAgent)
     assert agent.name == "cursor"
+
+
+def test_create_gemini():
+    agent = create_agent(AgentConfig(agent=AgentType.GEMINI))
+    assert isinstance(agent, GeminiAgent)
+    assert agent.name == "gemini"
 
 
 def test_agent_enabled_flag():
@@ -148,12 +156,66 @@ def test_cursor_uses_agent_binary():
     assert cmd[0] == "agent"
 
 
+def test_cursor_json_output_parsed_for_streaming():
+    """Cursor JSON stdout is converted to readable result for streaming display."""
+    agent = create_agent(AgentConfig(agent=AgentType.CURSOR))
+    raw = '{"type":"result","subtype":"success","result":"Created script.\\nRun: python x.py"}'
+    assert agent._line_to_readable(raw) == "Created script.\nRun: python x.py"
+    # Non-JSON line is passed through
+    assert agent._line_to_readable("plain text") == "plain text"
+    # Invalid JSON is passed through
+    assert agent._line_to_readable("{broken") == "{broken"
+
+
+def test_gemini_full_auto_flags():
+    """Gemini full-auto uses --yolo so headless auto-approves tool actions."""
+    agent = create_agent(
+        AgentConfig(agent=AgentType.GEMINI),
+        approval_mode=ApprovalMode.FULL_AUTO,
+    )
+    cmd = agent._build_cmd()
+    assert "gemini" in cmd
+    assert "--output-format" in cmd
+    assert "json" in cmd
+    assert "--yolo" in cmd
+    assert "--sandbox" not in cmd
+
+
+def test_gemini_suggest_flags():
+    """Gemini suggest mode uses --sandbox."""
+    agent = create_agent(
+        AgentConfig(agent=AgentType.GEMINI),
+        approval_mode=ApprovalMode.SUGGEST,
+    )
+    cmd = agent._build_cmd()
+    assert "--sandbox" in cmd
+
+
+def test_gemini_uses_gemini_binary():
+    """Gemini adapter uses `gemini` as the CLI command."""
+    agent = create_agent(AgentConfig(agent=AgentType.GEMINI))
+    cmd = agent._build_cmd()
+    assert cmd[0] == "gemini"
+
+
+def test_gemini_json_response_parsed():
+    """Gemini headless JSON uses 'response' field."""
+    agent = create_agent(AgentConfig(agent=AgentType.GEMINI))
+    raw = '{"response":"Done.","stats":{"prompt_tokens":10}}'
+    assert agent._extract_result(raw) == "Done."
+    assert agent._line_to_readable(raw) == "Done."
+    # Non-JSON passed through
+    assert agent._extract_result("plain") == "plain"
+
+
 def test_model_override_in_cmd():
     for agent_type in AgentType:
         agent = create_agent(AgentConfig(agent=agent_type, model="test-model"))
         cmd = agent._build_cmd()
-        assert "--model" in cmd
-        idx = cmd.index("--model")
+        # Gemini uses -m, others use --model
+        assert "--model" in cmd or "-m" in cmd
+        flag = "--model" if "--model" in cmd else "-m"
+        idx = cmd.index(flag)
         assert cmd[idx + 1] == "test-model"
 
 
