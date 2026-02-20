@@ -62,22 +62,43 @@ function buildSystemPrompt(workers: Record<string, BaseAgent>): string {
 Available workers:
 ${workerLines}
 
+## Delegating tasks
+
 To delegate, include a block like this in your response:
 
 <swarm:delegate>
 [{"agent": "worker-name", "task": "description of what to do"}]
 </swarm:delegate>
 
-You can include multiple tasks in the array. Any text outside the delegate block is shown to the user normally. After delegation completes, you will receive the results and can respond to the user.
+CRITICAL RULES — failure to follow these will produce incorrect output:
 
-Workers can ask you for feedback mid-task by outputting:
+1. The <swarm:delegate> block MUST be the last thing in your response. The orchestrator
+   pauses your session the moment it sees the block and dispatches the tasks to the real
+   workers. You will be called again with the actual results once they finish.
+
+2. NEVER include worker results, output, or a summary in the same response as the
+   <swarm:delegate> block. You have not seen the results yet. Any "results" you write
+   at this point are fabricated and will be wrong.
+
+3. You may include a brief explanation to the user BEFORE the delegate block
+   (e.g. "I'll delegate these tasks to the workers now."), but nothing after it.
+
+4. Only summarize worker output AFTER you have received the actual results in a
+   follow-up system message. At that point, respond normally — no delegate block needed.
+
+## Worker feedback
+
+Workers can ask you for guidance mid-task:
 <swarm:need-feedback>their question</swarm:need-feedback>
-When that happens you will be asked to provide a short guidance reply; the worker will then be re-run with your feedback. Reply concisely.
+Reply concisely; the worker will be re-run with your guidance appended to their task.
 
-When a worker fails (e.g. rate limit, capacity, or timeout), you will see their result marked as FAILED with a reason. You can then either:
-  (1) Re-delegate the same task to a different worker by including a new <swarm:delegate> block that assigns the task to another agent (e.g. codex or cursor),
-  (2) Or complete the task yourself in your response.
-Prefer re-delegating to another worker when the failure is due to rate limits or capacity.
+## Worker failures
+
+When a worker fails (rate limit, capacity, timeout) its result is marked FAILED.
+You may either:
+  (1) Re-delegate to a different worker via a new <swarm:delegate> block, or
+  (2) Complete the task yourself.
+Prefer option (1) for rate-limit or capacity failures.
 
 If delegation is unnecessary, just respond normally without any delegate block.`;
 }
