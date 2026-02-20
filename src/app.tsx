@@ -6,14 +6,17 @@ import { Message } from './components/Message.js';
 import { WorkerPanel } from './components/WorkerPanel.js';
 import { ResultPanel } from './components/ResultPanel.js';
 import { useOrchestrator } from './hooks/useOrchestrator.js';
-import type { AppProps, ChatMessage, WorkerState, DelegateRequest, WorkerResult } from './types.js';
+import type { AppProps, ChatMessage, WorkerState, DelegateRequest, WorkerResult, HistoryItem } from './types.js';
 
 let msgCounter = 0;
 const mkId = () => `msg-${++msgCounter}`;
 
 export default function App({ prompt, verbose, cfg: initialCfg, configSource: initialConfigSource }: AppProps) {
   const { exit } = useApp();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Single chronological history — items are only ever appended, never inserted.
+  // This prevents Ink's Static (count-based) from re-rendering stale items when
+  // result panels shift forward after new messages are added.
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [input, setInput] = useState('');
   const [workers, setWorkers] = useState<WorkerState[]>([]);
   const [delegating, setDelegating] = useState(false);
@@ -23,7 +26,6 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
     workspace: string; configSource: string; leadName: string;
     workerNames: string[]; approvalMode: string;
   } | null>(null);
-  const [resultPanels, setResultPanels] = useState<WorkerState[]>([]);
 
   // Throttle high-frequency updates (streaming chunks + worker lines) to reduce
   // Ink re-render frequency and prevent terminal blinking.
@@ -54,7 +56,7 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
   const onLeadDone = useCallback((full: string) => {
     streamingBufRef.current = '';
     setStreaming('');
-    setMessages(m => [...m, { id: mkId(), role: 'assistant', text: full, timestamp: Date.now() }]);
+    setHistory(h => [...h, { type: 'message', msg: { id: mkId(), role: 'assistant', text: full, timestamp: Date.now() } }]);
     setBusy(false);
   }, []);
 
@@ -88,9 +90,9 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
 
   const onDelegateEnd = useCallback((_results: WorkerResult[]) => {
     setDelegating(false);
-    // Push completed workers into result panels (permanent history)
+    // Append completed workers to history in order, then clear live workers.
     setWorkers(current => {
-      setResultPanels(prev => [...prev, ...current]);
+      setHistory(h => [...h, ...current.map(w => ({ type: 'result' as const, worker: w }))]);
       return [];
     });
   }, []);
@@ -134,16 +136,16 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
         // One-shot mode
         if (prompt) {
           setBusy(true);
-          setMessages(m => [...m, { id: mkId(), role: 'user', text: prompt, timestamp: Date.now() }]);
+          setHistory(h => [...h, { type: 'message', msg: { id: mkId(), role: 'user', text: prompt, timestamp: Date.now() } }]);
           await submit(prompt);
           setTimeout(() => exit(), 200);
         }
       } catch (err) {
         if (!cancelled) {
-          setMessages(m => [...m, {
+          setHistory(h => [...h, { type: 'message', msg: {
             id: mkId(), role: 'system', timestamp: Date.now(),
             text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-          }]);
+          } }]);
         }
       }
     })();
@@ -151,7 +153,7 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addSystem = useCallback((text: string) => {
-    setMessages(m => [...m, { id: mkId(), role: 'system', text, timestamp: Date.now() }]);
+    setHistory(h => [...h, { type: 'message', msg: { id: mkId(), role: 'system', text, timestamp: Date.now() } }]);
   }, []);
 
   const handleSlashCommand = useCallback(async (cmd: string): Promise<boolean> => {
@@ -230,7 +232,7 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
     }
 
     setBusy(true);
-    setMessages(m => [...m, { id: mkId(), role: 'user', text: trimmed, timestamp: Date.now() }]);
+    setHistory(h => [...h, { type: 'message', msg: { id: mkId(), role: 'user', text: trimmed, timestamp: Date.now() } }]);
     await submit(trimmed);
   }, [busy, submit, handleSlashCommand]);
 
@@ -241,11 +243,10 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
     }
   });
 
-  // All static items: banner + messages + result panels
-  const staticItems: Array<{ type: 'banner' } | { type: 'message'; msg: ChatMessage } | { type: 'result'; worker: WorkerState }> = [];
-  if (bannerInfo) staticItems.push({ type: 'banner' });
-  for (const msg of messages) staticItems.push({ type: 'message', msg });
-  for (const w of resultPanels) staticItems.push({ type: 'result', worker: w });
+  // Prepend banner (once set) to the history for Static rendering.
+  // Everything is append-only — Static tracks by count, so insertions corrupt it.
+  type StaticItem = { type: 'banner' } | HistoryItem;
+  const staticItems: StaticItem[] = bannerInfo ? [{ type: 'banner' }, ...history] : [...history];
 
   return (
     <Box flexDirection="column">
