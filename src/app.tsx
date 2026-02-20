@@ -25,15 +25,34 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
   } | null>(null);
   const [resultPanels, setResultPanels] = useState<WorkerState[]>([]);
 
-  // Stable callback refs
-  const stateRef = useRef({ workers, streaming });
-  useEffect(() => { stateRef.current = { workers, streaming }; }, [workers, streaming]);
+  // Throttle high-frequency updates (streaming chunks + worker lines) to reduce
+  // Ink re-render frequency and prevent terminal blinking.
+  const streamingBufRef = useRef('');
+  const workerLineBufRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    const streamId = setInterval(() => {
+      const buf = streamingBufRef.current;
+      if (buf) setStreaming(buf);
+    }, 80);
+
+    const workerLineId = setInterval(() => {
+      const updates = workerLineBufRef.current;
+      if (Object.keys(updates).length === 0) return;
+      const snapshot = { ...updates };
+      workerLineBufRef.current = {};
+      setWorkers(ws => ws.map(w => w.name in snapshot ? { ...w, lastLine: snapshot[w.name] } : w));
+    }, 100);
+
+    return () => { clearInterval(streamId); clearInterval(workerLineId); };
+  }, []);
 
   const onLeadChunk = useCallback((chunk: string) => {
-    setStreaming(s => s + chunk);
+    streamingBufRef.current += chunk;
   }, []);
 
   const onLeadDone = useCallback((full: string) => {
+    streamingBufRef.current = '';
     setStreaming('');
     setMessages(m => [...m, { id: mkId(), role: 'assistant', text: full, timestamp: Date.now() }]);
     setBusy(false);
@@ -50,7 +69,7 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
   }, []);
 
   const onWorkerLine = useCallback((name: string, line: string) => {
-    setWorkers(ws => ws.map(w => w.name === name ? { ...w, lastLine: line } : w));
+    workerLineBufRef.current[name] = line;
   }, []);
 
   const onWorkerDone = useCallback((name: string, result: WorkerResult) => {
