@@ -63,12 +63,28 @@ export class GeminiAgent extends BaseAgent {
   }
 
   private extractResult(raw: string): string {
+    // Try parsing the entire output as one JSON blob (pretty-printed case)
     try {
       const data = JSON.parse(raw) as Record<string, unknown>;
       if (typeof data === 'object' && data !== null) {
         return (data['response'] ?? data['result'] ?? raw) as string;
       }
     } catch {}
+
+    // Gemini may stream multiple JSON objects (one per line). Take the last
+    // line that parses as JSON with a response field — it's the final answer.
+    let lastResult: string | null = null;
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) continue;
+      try {
+        const data = JSON.parse(trimmed) as Record<string, unknown>;
+        const val = (data['response'] ?? data['result']) as string | undefined;
+        if (val) lastResult = val;
+      } catch {}
+    }
+    if (lastResult !== null) return lastResult;
+
     return raw;
   }
 }
