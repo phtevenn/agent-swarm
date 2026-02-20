@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-import React from 'react';
+import React, { useState } from 'react';
 import { render } from 'ink';
 import { Command } from 'commander';
 import { loadConfigWithFallback } from './lib/config/loader.js';
 import { requiresTrust, isWorkspaceTrusted, trustWorkspace } from './lib/trust.js';
+import { TrustPrompt } from './components/TrustPrompt.js';
 import App from './app.js';
 import type { AppProps } from './types.js';
+import type { Config } from './lib/config/schema.js';
 
 const program = new Command();
 
@@ -92,9 +94,7 @@ const opts = program.opts<AppProps>();
 if (!process.argv.slice(2).some(a => ['trust', 'status', 'check'].includes(a))) {
   const cwd = process.cwd();
 
-  // Load config and check trust before launching Ink.
-  // Doing this here gives a plain, visible error instead of a brief Ink flash.
-  let cfg;
+  let cfg: Config;
   let configSource: string;
   try {
     [cfg, configSource] = loadConfigWithFallback(opts.config);
@@ -105,19 +105,21 @@ if (!process.argv.slice(2).some(a => ['trust', 'status', 'check'].includes(a))) 
 
   const mode = cfg.swarm.approval_mode;
 
+  // --trust flag: persist trust and proceed immediately (no prompt)
   if (opts.trust && requiresTrust(mode)) {
     trustWorkspace(cwd);
   }
 
-  if (requiresTrust(mode) && !opts.trust && !isWorkspaceTrusted(cwd)) {
-    console.error(
-      `\nWorkspace not trusted: ${cwd}\n` +
-      `Approval mode '${mode}' grants agents elevated permissions in this directory.\n\n` +
-      `  swarm trust          Trust permanently\n` +
-      `  swarm --trust        Trust for this session only\n`,
-    );
-    process.exit(1);
+  const needsTrustPrompt = requiresTrust(mode) && !opts.trust && !isWorkspaceTrusted(cwd);
+
+  // Root wrapper: shows TrustPrompt if needed, then the full App
+  function Root() {
+    const [trusted, setTrusted] = useState(!needsTrustPrompt);
+    if (!trusted) {
+      return <TrustPrompt workspace={cwd} mode={mode} onTrusted={() => setTrusted(true)} />;
+    }
+    return <App {...opts} cfg={cfg} configSource={configSource} />;
   }
 
-  render(<App {...opts} cfg={cfg} configSource={configSource} />);
+  render(<Root />);
 }
