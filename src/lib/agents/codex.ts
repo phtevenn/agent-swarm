@@ -1,4 +1,4 @@
-import { BaseAgent } from './base.js';
+import { BaseAgent, type StopSignal } from './base.js';
 import type { AgentConfig, ApprovalMode } from '../config/schema.js';
 
 const APPROVAL_FLAGS: Record<ApprovalMode, string[]> = {
@@ -31,6 +31,31 @@ export class CodexAgent extends BaseAgent {
 
   async execute(task: string, context = ''): Promise<string> {
     const prompt = context ? `${task}\n\n${context}` : task;
-    return this.runCli([...this.buildCmd(), prompt]);
+    const raw = await this.runCli([...this.buildCmd(), prompt]);
+    return this.extractResult(raw);
+  }
+
+  override async runCliStreaming(
+    args: string[],
+    onLine?: (line: string) => StopSignal | null | undefined,
+    noOutputTimeout?: number,
+  ): Promise<string> {
+    const raw = await super.runCliStreaming(args, onLine, noOutputTimeout);
+    return this.extractResult(raw);
+  }
+
+  // Codex outputs a structured log ending with:
+  //   tokens used\n<count>\n<clean final response>
+  // Everything before that marker (headers, exec traces, warnings) is stripped.
+  private extractResult(raw: string): string {
+    const marker = '\ntokens used\n';
+    const idx = raw.lastIndexOf(marker);
+    if (idx !== -1) {
+      const after = raw.slice(idx + marker.length);
+      // First line is the numeric count ("2,282"), the rest is the clean response
+      const response = after.split('\n').slice(1).join('\n').trim();
+      if (response) return response;
+    }
+    return raw;
   }
 }
