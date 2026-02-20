@@ -121,5 +121,5 @@ if (!process.argv.slice(2).some(a => ['trust', 'status', 'check'].includes(a))) 
     return <App {...opts} cfg={cfg} configSource={configSource} />;
   }
 
-  render(<Root />);
+  render(<Root />, { patchConsole: false });
 }
