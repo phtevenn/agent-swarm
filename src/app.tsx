@@ -76,7 +76,7 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
     });
   }, []);
 
-  const { submit, cancel, setOrchestrator } = useOrchestrator({
+  const { submit, cancel, setOrchestrator, getOrchestrator } = useOrchestrator({
     onLeadChunk, onLeadDone, onDelegateStart, onWorkerLine, onWorkerDone, onWorkerFail, onDelegateEnd,
   });
 
@@ -131,14 +131,89 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const addSystem = useCallback((text: string) => {
+    setMessages(m => [...m, { id: mkId(), role: 'system', text, timestamp: Date.now() }]);
+  }, []);
+
+  const handleSlashCommand = useCallback(async (cmd: string): Promise<boolean> => {
+    const [name, ...args] = cmd.slice(1).trim().toLowerCase().split(/\s+/);
+    switch (name) {
+      case 'help':
+        addSystem(
+          'Slash commands:\n' +
+          '  /help      Show this help\n' +
+          '  /workers   Show worker status\n' +
+          '  /check     Health-check all agent CLIs\n' +
+          '  /trust     Trust current workspace\n' +
+          '  /exit      Exit swarm\n' +
+          '  /quit\n' +
+          '\n' +
+          'Anything else is sent to the lead agent.'
+        );
+        return true;
+
+      case 'exit':
+      case 'quit':
+      case 'q':
+        exit();
+        return true;
+
+      case 'trust': {
+        const { trustWorkspace } = await import('./lib/trust.js');
+        trustWorkspace(process.cwd());
+        addSystem(`Trusted workspace: ${process.cwd()}`);
+        return true;
+      }
+
+      case 'workers': {
+        const orch = getOrchestrator();
+        if (!orch) { addSystem('Orchestrator not ready yet.'); return true; }
+        const statuses = await (orch as unknown as { getStatus: () => Promise<Record<string, Record<string, unknown>>> }).getStatus();
+        const lines = Object.entries(statuses).map(([name, s]) =>
+          `  ${name.padEnd(16)} ${String((s as Record<string, unknown>)['state'] ?? 'idle')}`
+        );
+        addSystem('Agent status:\n' + lines.join('\n'));
+        return true;
+      }
+
+      case 'check': {
+        const { createAgent } = await import('./lib/agents/index.js');
+        const { loadConfigWithFallback } = await import('./lib/config/loader.js');
+        const [cfg] = loadConfigWithFallback();
+        const mode = cfg.swarm.approval_mode;
+        const agents = [
+          createAgent(cfg.swarm.lead, process.cwd(), mode),
+          ...cfg.swarm.workers.filter(w => w.enabled).map(w => createAgent(w, process.cwd(), mode)),
+        ];
+        addSystem('Running health checks…');
+        const results = await Promise.all(agents.map(async a => {
+          const ok = await a.healthCheck();
+          return `  ${ok ? '✓' : '✗'} ${a.name}`;
+        }));
+        addSystem('Health checks:\n' + results.join('\n'));
+        return true;
+      }
+
+      default:
+        addSystem(`Unknown command: /${name}. Type /help for commands.`);
+        return true;
+    }
+  }, [addSystem, exit, getOrchestrator]);
+
   const handleSubmit = useCallback(async (val: string) => {
     const trimmed = val.trim();
     if (!trimmed || busy) return;
     setInput('');
+
+    if (trimmed.startsWith('/')) {
+      await handleSlashCommand(trimmed);
+      return;
+    }
+
     setBusy(true);
     setMessages(m => [...m, { id: mkId(), role: 'user', text: trimmed, timestamp: Date.now() }]);
     await submit(trimmed);
-  }, [busy, submit]);
+  }, [busy, submit, handleSlashCommand]);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {

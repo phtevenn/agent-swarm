@@ -44,5 +44,7 @@ export function useOrchestrator(callbacks: OrchestratorHookCallbacks) {
     abortRef.current?.abort();
   }, []);
 
-  return { submit, cancel, setOrchestrator };
+  const getOrchestrator = useCallback(() => orchRef.current, []);
+
+  return { submit, cancel, setOrchestrator, getOrchestrator };
 }
