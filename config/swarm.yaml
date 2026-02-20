@@ -3,6 +3,14 @@ swarm:
   # Directory for inter-agent communication
   bus_dir: .swarm
 
+  # Permission level inherited by ALL agents (lead + workers).
+  # Options: full-auto | auto-edit | suggest | default
+  #   full-auto  — no human approval; agents execute everything
+  #   auto-edit  — auto-approve file edits, prompt for shell commands
+  #   suggest    — read-only / plan mode; agents propose but don't execute
+  #   default    — each agent's built-in default behavior
+  approval_mode: full-auto
+
   # Lead agent — receives tasks from the human, delegates to workers
   lead:
     agent: claude-code
@@ -18,6 +26,8 @@ swarm:
     - agent: cursor
       # enabled: true
       # max_concurrent_tasks: 1
+    # - agent: gemini
+    #   enabled: true
 
   # Task settings
   tasks:
@@ -25,6 +35,10 @@ swarm:
     worker_timeout: 600
     # Max number of subtasks running in parallel
     max_parallel: 4
+    # If a worker produces no stdout for this long (seconds), it is killed to avoid hang
+    no_output_timeout: 120
+    # Max seconds to wait for the lead agent (prevents main agent hang)
+    lead_timeout: 600
 
 # Phase 2: Discord integration
 # discord:
