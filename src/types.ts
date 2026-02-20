@@ -69,6 +69,11 @@ export interface OrchestratorCallbacks {
   onDelegateEnd?: (results: WorkerResult[]) => void;
 }
 
+/** A single item in the immutable Static history (chat message or worker result). */
+export type HistoryItem =
+  | { type: 'message'; msg: ChatMessage }
+  | { type: 'result'; worker: WorkerState };
+
 /** Props passed from cli.tsx to app.tsx. */
 export interface AppProps {
   prompt?: string;
