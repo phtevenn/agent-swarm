@@ -266,12 +266,21 @@ export default function App({ prompt, verbose, cfg: initialCfg, configSource: in
 
       {delegating && <WorkerPanel workers={workers} />}
 
-      {streaming && (
-        <Box paddingX={2} flexDirection="column">
-          <Text dimColor>claude-code</Text>
-          <Text color="cyan">{streaming}</Text>
-        </Box>
-      )}
+      {streaming && (() => {
+        // Show only the last STREAM_WINDOW lines so the box has a fixed max-height.
+        // Growing height forces Ink to repaint everything below it — the main
+        // source of visible terminal blinking.
+        const STREAM_WINDOW = 5;
+        const lines = streaming.split('\n').slice(-STREAM_WINDOW);
+        return (
+          <Box paddingX={2} flexDirection="column">
+            <Text dimColor>claude-code</Text>
+            {lines.map((line, i) => (
+              <Text key={i} color="cyan">{line}</Text>
+            ))}
+          </Box>
+        );
+      })()}
 
       {!prompt && (
         <Box borderStyle="single" borderColor={busy ? 'yellow' : 'green'} paddingX={1} marginTop={1}>
