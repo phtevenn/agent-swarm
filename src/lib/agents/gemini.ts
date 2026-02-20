@@ -63,20 +63,34 @@ export class GeminiAgent extends BaseAgent {
   }
 
   private extractResult(raw: string): string {
-    // Try parsing the entire output as one JSON blob (pretty-printed case)
+    // Gemini prefixes output with plain-text lines (e.g. "Loaded cached credentials.")
+    // before the JSON blob. Find the first '{' and attempt to parse from there.
+    const jsonStart = raw.indexOf('{');
+    if (jsonStart !== -1) {
+      try {
+        const data = JSON.parse(raw.slice(jsonStart)) as Record<string, unknown>;
+        if (typeof data === 'object' && data !== null) {
+          const val = (data['response'] ?? data['result']) as string | undefined;
+          if (val) return val;
+        }
+      } catch {}
+    }
+
+    // Fallback: try parsing the full string (no prefix-text case)
     try {
       const data = JSON.parse(raw) as Record<string, unknown>;
       if (typeof data === 'object' && data !== null) {
-        return (data['response'] ?? data['result'] ?? raw) as string;
+        const val = (data['response'] ?? data['result']) as string | undefined;
+        if (val) return val;
       }
     } catch {}
 
-    // Gemini may stream multiple JSON objects (one per line). Take the last
-    // line that parses as JSON with a response field — it's the final answer.
+    // Last resort: scan each complete single-line JSON object and take the last
+    // one with a response/result field (handles streaming multiple JSON chunks).
     let lastResult: string | null = null;
     for (const line of raw.split('\n')) {
       const trimmed = line.trim();
-      if (!trimmed.startsWith('{')) continue;
+      if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
       try {
         const data = JSON.parse(trimmed) as Record<string, unknown>;
         const val = (data['response'] ?? data['result']) as string | undefined;
