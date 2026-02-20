@@ -1,12 +1,16 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import Spinner from 'ink-spinner';
 import type { WorkerState } from '../types.js';
 
-export function WorkerRow({ worker }: { worker: WorkerState }) {
+interface WorkerRowProps {
+  worker: WorkerState;
+  spinnerChar: string;
+}
+
+export function WorkerRow({ worker, spinnerChar }: WorkerRowProps) {
   const elapsed = ((Date.now() - worker.startedAt) / 1000).toFixed(0);
   const icon = worker.status === 'running'
-    ? <Text color="cyan"><Spinner type="dots" /></Text>
+    ? <Text color="cyan">{spinnerChar}</Text>
     : worker.status === 'done'
       ? <Text color="green">✓</Text>
       : <Text color="red">✗</Text>;
