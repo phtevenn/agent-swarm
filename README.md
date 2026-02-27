@@ -1,147 +1,221 @@
 # Agent Swarm
 
-Orchestration framework for coordinating multiple coding agents (Claude Code, Codex, Cursor Agent, Gemini).
+Orchestration framework for coordinating multiple coding agents (Claude Code, Codex, Cursor, Gemini) with an interactive terminal UI.
 
-> **Status:** Early development — Phase 1 core complete, Phase 2 scaffolded
+> **Status:** Active development — TypeScript/Ink rewrite, core complete
 
 ## Overview
 
-Agent Swarm lets you configure a **lead agent** that accepts tasks from a human, breaks them down, and delegates subtasks to **worker agents** running in parallel. Results flow back through a shared message bus so the lead can synthesize a final outcome.
-
-## Architecture
+Agent Swarm launches a **lead agent** that accepts tasks from a human via an interactive TUI, optionally delegates subtasks to **worker agents** running in parallel, and synthesizes results back to you. Workers run their own CLI tools (`claude`, `codex`, `agent`, `gemini`) as subprocesses.
 
 ```
-Human ──► Lead Agent (configurable)
+Human ──► Lead Agent (Claude Code by default)
               │
-              ├──► Worker Agent A  ──┐
-              ├──► Worker Agent B  ──┤  message bus (.swarm/)
-              └──► Worker Agent C  ──┘
+              ├──► Worker: codex   ──┐
+              ├──► Worker: cursor  ──┤  file-based message bus (.swarm/)
+              └──► Worker: gemini  ──┘
                                       │
               ◄── synthesized result ──┘
 ```
 
-### Project Structure
+## Architecture
 
-```
-src/swarm/
-├── cli.py                  # Click CLI: run, status, check
-├── config/
-│   ├── schema.py           # Pydantic models for swarm.yaml
-│   └── loader.py           # YAML → validated Config
-├── core/
-│   ├── task.py             # Task model with lifecycle methods
-│   ├── message_bus.py      # File-based IPC via .swarm/
-│   └── orchestrator.py     # Decompose → execute → synthesize pipeline
-├── agents/
-│   ├── base.py             # BaseAgent ABC with async subprocess helper
-│   ├── claude_code.py      # `claude` CLI adapter (JSON output mode)
-│   ├── codex.py            # `codex` CLI adapter
-│   ├── cursor.py           # Cursor Agent (`agent` CLI)
-│   └── gemini.py           # Google Gemini CLI (`gemini`)
-├── discord/
-│   └── bot.py              # Discord status notifications (Phase 2)
-└── terminal/
-    ├── tmux.py             # Tmux multi-pane layout (Phase 2)
-    └── iterm2.py           # iTerm2 Python API layout (Phase 2)
+### Delegation protocol
+
+The lead agent delegates by emitting a structured XML block in its response:
+
+```xml
+<swarm:delegate>
+[{"agent": "codex", "task": "Add unit tests for utils/auth.ts"}]
+</swarm:delegate>
 ```
 
-### Supported Agents
+The orchestrator detects this block, pauses the lead, dispatches the tasks to the named workers in parallel, waits for all results, then resumes the lead with the actual output. Workers can also request mid-task guidance from the lead:
 
-| Agent        | Role Support   | Spawn Method    | Status       |
-|-------------|----------------|-----------------|-------------|
-| Claude Code | Lead / Worker | `claude` CLI   | Implemented |
-| Codex       | Worker        | `codex` CLI    | Implemented |
-| Cursor      | Worker        | `agent` CLI    | Implemented |
-| Gemini      | Lead / Worker | `gemini` CLI   | Implemented |
+```xml
+<swarm:need-feedback>Should I use Jest or Vitest?</swarm:need-feedback>
+```
 
-### Communication
+The lead receives the question, replies with concise guidance, and the worker is re-run with the guidance appended to its task.
 
-Agents communicate through a file-based message bus under `.swarm/`:
+### Project structure
 
-- **tasks/** — JSON task assignments from lead to workers
-- **status/** — agent status updates (idle, working, etc.)
-- **messages/** — inter-agent messages with timestamps
+```
+src/
+├── cli.tsx               # Commander CLI entry point + Ink render
+├── app.tsx               # Main Ink React UI
+├── types.ts              # Shared TypeScript interfaces
+├── hooks/
+│   └── useOrchestrator.ts
+├── components/
+│   ├── Banner.tsx        # Config/mode header shown on startup
+│   ├── Message.tsx       # Chat message renderer
+│   ├── ResultPanel.tsx   # Worker result card (collapsed/verbose)
+│   ├── TrustPrompt.tsx   # Trust confirmation dialog
+│   ├── WorkerPanel.tsx   # Live worker status during delegation
+│   └── WorkerRow.tsx     # Single worker row with spinner + last line
+└── lib/
+    ├── orchestrator.ts   # Delegate → parallel execute → synthesize
+    ├── message-bus.ts    # File-based IPC via .swarm/
+    ├── task.ts           # Task lifecycle model
+    ├── trust.ts          # Workspace trust persistence
+    ├── agents/
+    │   ├── base.ts       # BaseAgent ABC with streaming subprocess helper
+    │   ├── claude-code.ts
+    │   ├── codex.ts
+    │   ├── cursor.ts
+    │   ├── gemini.ts
+    │   └── index.ts      # createAgent factory
+    └── config/
+        ├── schema.ts     # Zod validation schemas
+        └── loader.ts     # YAML → validated Config
+config/
+└── swarm.yaml            # Default configuration
+```
 
-The bus supports async watching via `watchfiles` for real-time event processing.
+### Supported agents
+
+| Agent        | Role           | CLI binary | Notes                        |
+|-------------|----------------|-----------|------------------------------|
+| Claude Code | Lead / Worker  | `claude`  | Default lead                 |
+| Codex       | Worker         | `codex`   | OpenAI Codex CLI             |
+| Cursor      | Worker         | `agent`   | Cursor Agent CLI             |
+| Gemini      | Lead / Worker  | `gemini`  | Google Gemini CLI            |
 
 ## Setup
 
 ```bash
 # Install dependencies
-uv sync
+pnpm install
 
-# Include dev tools (pytest, ruff)
-uv sync --extra dev
+# Build TypeScript
+pnpm build
 
-# Include all optional deps (discord.py, iterm2)
-uv sync --extra all
+# Optional: link globally
+npm link
 ```
+
+Requires Node.js 18+ and `pnpm`. Each agent type also needs its own CLI installed and authenticated (`claude`, `codex`, `agent`, `gemini`).
 
 ## Usage
 
+### Interactive mode (default)
+
 ```bash
-# Submit a task to the swarm
-swarm run "Refactor the auth module"
+# Launch interactive TUI
+swarm
 
-# Use a specific config file
-swarm --config config/swarm.yaml run "Add unit tests for utils/"
+# Use a custom config file
+swarm --config path/to/swarm.yaml
 
-# Show agent status table
+# Trust workspace and launch (skips trust prompt)
+swarm --trust
+
+# Show full worker output
+swarm -v
+```
+
+### One-shot mode
+
+```bash
+# Submit a single task and exit
+swarm --prompt "Refactor the auth module"
+swarm -p "Add unit tests for utils/"
+```
+
+### Utility commands
+
+```bash
+# Show status of configured agents
 swarm status
 
-# Health-check all configured agents
+# Health-check all configured agent CLIs
 swarm check
 
-# Enable debug logging
-swarm -v run "Fix the login bug"
+# Trust current workspace permanently
+swarm trust
+
+# Revoke trust
+swarm trust --revoke
 ```
+
+### In-TUI slash commands
+
+| Command    | Description                        |
+|-----------|------------------------------------|
+| `/help`   | List available slash commands      |
+| `/workers`| Show live agent status             |
+| `/check`  | Run health checks on all agents    |
+| `/trust`  | Trust current workspace            |
+| `/exit`   | Exit (also `Ctrl+C`, `/quit`, `/q`)|
 
 ## Configuration
 
-Edit `config/swarm.yaml` to change which agent leads, which agents are workers, and how tasks are managed.
+`config/swarm.yaml` is loaded by default. Override with `--config`.
 
 ```yaml
 swarm:
+  # Directory for inter-agent message bus files
+  bus_dir: .swarm
+
+  # Approval mode — inherited by ALL agents (lead + workers)
+  # full-auto  — agents execute everything without human approval (requires trust)
+  # auto-edit  — auto-approve file edits, prompt for shell commands (requires trust)
+  # suggest    — read-only / plan mode; agents propose but don't execute
+  # default    — each agent's built-in default behavior
+  approval_mode: full-auto
+
   lead:
-    agent: claude-code       # claude-code | codex | cursor | gemini
+    agent: claude-code      # claude-code | codex | cursor | gemini
     # model: claude-sonnet-4-20250514
     # timeout: 300
+
   workers:
     - agent: codex
+      # enabled: true
       # max_concurrent_tasks: 2
     - agent: cursor
-      # enabled: false
+      # enabled: true
     # - agent: gemini
     #   enabled: true
-  tasks:
-    worker_timeout: 600      # seconds per subtask
-    max_parallel: 4          # concurrent subtasks
 
-# Phase 2
-# discord:
-#   enabled: true
-#   token_env: DISCORD_BOT_TOKEN
-#   channel_id: 123456789
-# terminal:
-#   backend: tmux            # tmux | iterm2
-#   layout: tiled            # tiled | horizontal | vertical
+  tasks:
+    worker_timeout: 600      # Max seconds per subtask
+    max_parallel: 4          # Max concurrent subtasks
+    no_output_timeout: 120   # Kill worker if silent for this long (seconds)
+    lead_timeout: 600        # Max seconds to wait for the lead agent
 ```
+
+### Workspace trust
+
+Modes `full-auto` and `auto-edit` allow agents to execute code without human confirmation. Before using these modes, the tool will prompt you to explicitly trust the workspace. Trust is stored in `~/.config/agent-swarm/trusted.json`.
+
+## How it works
+
+1. You type a message in the TUI; the orchestrator forwards it to the lead agent.
+2. The lead responds — either directly (no delegation needed) or with a `<swarm:delegate>` block naming worker agents and their tasks.
+3. The orchestrator dispatches delegated tasks in parallel (up to `max_parallel` at once) and streams each worker's stdout live in the TUI.
+4. If a worker emits a `<swarm:need-feedback>` block, the orchestrator pauses that worker, asks the lead for guidance, and re-runs the worker with the guidance appended.
+5. When all workers finish, results (with failure classification for rate limits, timeouts, etc.) are fed back to the lead.
+6. The lead synthesizes and responds to you.
+7. This loop repeats up to 5 delegation rounds per user message to handle re-delegation on failures.
 
 ## Roadmap
 
-### Phase 1 — Core Framework
-- [x] Project scaffolding (uv, pyproject.toml)
-- [x] Configuration schema and YAML loader (Pydantic)
-- [x] Task model with lifecycle management
-- [x] File-based message bus with async watchers
-- [x] Core orchestrator (decompose → parallel execute → synthesize)
-- [x] Agent adapters (Claude Code, Codex, Cursor)
-- [x] CLI entry point (run, status, check)
+### Done
+- [x] TypeScript/Ink rewrite with interactive TUI
+- [x] Streaming lead + live worker output with throttled re-renders
+- [x] Parallel worker delegation with configurable concurrency
+- [x] Worker feedback loop (`<swarm:need-feedback>`)
+- [x] Failure classification and re-delegation (rate limit, timeout, capacity)
+- [x] Workspace trust system
+- [x] File-based message bus (`.swarm/`)
+- [x] `status`, `check`, `trust` subcommands
+- [x] One-shot (`--prompt`) mode
 
-### Phase 2 — Extended Features
-- [ ] Discord bot for real-time status updates
-- [ ] iTerm2 multi-tab agent view
-- [ ] Tmux multi-pane layout support
-- [ ] Direct human-to-worker messaging
-- [ ] Agent output streaming / live tailing
-- [ ] Task dependency graphs (subtask ordering)
+### Planned
+- [ ] Discord bot for real-time status notifications
+- [ ] Tmux multi-pane layout (one pane per agent)
+- [ ] iTerm2 multi-tab layout
+- [ ] Task dependency graphs (ordered subtasks)
+- [ ] Agent output log files
